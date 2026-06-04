@@ -1,0 +1,269 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "Get list of throttled activities",
+        "description": "This SQL query returns a list of all tasks within the last [check_last_x_hours] hours that have been throttled (been running for [timeout_warning_minutes] minutes without completing)",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 3,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderQuery": {
+              "value": "@concat('SELECT\n    CONCAT(''task_id: '', task_id\n            ,''</br>object_name: '', object_name\n            , ''</br>run_id: '', LOWER(run_id)\n            , ''</br>task_executions_id: '', LOWER(task_executions_id)\n            , ''</br>duration: <strong>'', DATEDIFF(second, start_datetime, getdate())/60.0\n            , '' minutes''\n            , ''</strong></br>fabric url: '', monitoring_url\n        ) as details\nFROM logging.task_executions\nWHERE \n    start_datetime > DATEADD(hour,-',pipeline().parameters.check_last_x_hours,', getdate())\n    and end_datetime IS NULL\n    and DATEDIFF(second, start_datetime, getdate())/60.0 > '\n    , pipeline().parameters.timeout_warning_minutes\n)",
+              "type": "Expression"
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "firstRowOnly": false,
+          "datasetSettings": {
+            "annotations": [],
+            "connectionSettings": {
+              "name": "38c49a58_562a_466b_b309_defa4a9a28f9",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "@pipeline().DataFactory",
+                  "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                },
+                "externalReferences": {
+                  "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                }
+              }
+            },
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "typeProperties": {}
+          }
+        }
+      },
+      {
+        "name": "Get list of abnormal completions",
+        "description": "This SQL query returns a list of all tasks within the last [check_last_x_hours]  hours that have completed successfully, but took longer than [timeout_warning_minutes] hours",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 3,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderQuery": {
+              "value": "@concat(\n'SELECT\n    CONCAT(''task_id: '', task_id\n            ,''</br>object_name: '', object_name\n            , ''</br>run_id: '', LOWER(run_id)\n            , ''</br>task_executions_id: '', LOWER(task_executions_id)\n            , ''</br>duration: <strong>'', DATEDIFF(second, start_datetime, getdate())/60.0\n            , '' minutes''\n            , ''</strong></br>fabric url: '', monitoring_url\n        ) as details\nFROM logging.task_executions\nWHERE \n    start_datetime > DATEADD(hour,-',pipeline().parameters.check_last_x_hours,', getdate())\n    and status = ''Completed''\n    and DATEDIFF(second, start_datetime, end_datetime)/60.0 > '\n    , pipeline().parameters.timeout_warning_minutes\n)",
+              "type": "Expression"
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "firstRowOnly": false,
+          "datasetSettings": {
+            "annotations": [],
+            "connectionSettings": {
+              "name": "a9840248_6905_4386_b6f2_0560121df5de",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "@pipeline().DataFactory",
+                  "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                },
+                "externalReferences": {
+                  "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                }
+              }
+            },
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "typeProperties": {}
+          }
+        }
+      },
+      {
+        "name": "Check if there is an email to send",
+        "description": "If no activities are found by the lookup, do nothing. Otherwise, send an email with the list of activities.",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Get list of throttled activities",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@equals(activity('Get list of throttled activities').output.count,0)",
+            "type": "Expression"
+          },
+          "ifFalseActivities": [
+            {
+              "name": "Send email with list of throttled pipelines",
+              "description": "Sends an email with the details of all tasks found by the lookup activity. These will be a list of throttled pipelines that have not completed within 2 hours",
+              "type": "InvokePipeline",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 3,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "waitOnCompletion": true,
+                "operationType": "InvokeFabricPipeline",
+                "pipelineId": {
+                  "value": "@pipeline().libraryVariables.vl_guids_pl_send_email_id",
+                  "type": "Expression"
+                },
+                "workspaceId": {
+                  "value": "@pipeline().DataFactory",
+                  "type": "Expression"
+                },
+                "parameters": {
+                  "email_address": {
+                    "value": "@pipeline().libraryVariables.vl_runtime_alert_email",
+                    "type": "Expression"
+                  },
+                  "email_subject": {
+                    "value": "WARNING: Metadata framework pipelines may be throttled",
+                    "type": "Expression"
+                  },
+                  "email_body": {
+                    "value": "@concat(\n    'The following pipelines have been running for over 2 hours and have not completed its execution. They require further evaluation.'\n    ,'</br>'\n    ,'</br>'\n    , join(\n        activity('Get list of throttled activities').output.value\n        ,'</br></br>'\n    )\n)",
+                    "type": "Expression"
+                  },
+                  "execution_url": {
+                    "value": "@concat(\n    'https://app.powerbi.com/workloads/data-pipeline/monitoring/workspaces/',\n    pipeline().DataFactory,\n    '/pipelines/',\n    pipeline().PipelineName,\n    '/',\n    pipeline().RunId\n)",
+                    "type": "Expression"
+                  }
+                }
+              },
+              "externalReferences": {
+                "connection": "@pipeline().libraryVariables.vl_guids_fabric_pipeline_connection_id"
+              }
+            }
+          ],
+          "ifTrueActivities": []
+        }
+      },
+      {
+        "name": "Check for emails to send",
+        "description": "If no activities are found by the lookup, do nothing. Otherwise, send an email with the list of activities.",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Get list of abnormal completions",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@equals(activity('Get list of abnormal completions').output.count,0)",
+            "type": "Expression"
+          },
+          "ifFalseActivities": [
+            {
+              "name": "Send email with list of abnormal pipelines",
+              "description": "Sends an email with the details of all tasks found by the lookup activity. These will be a list of pipelines that have completed but took longer than timeout_warning_minutes",
+              "type": "InvokePipeline",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 3,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "waitOnCompletion": true,
+                "operationType": "InvokeFabricPipeline",
+                "pipelineId": {
+                  "value": "@pipeline().libraryVariables.vl_guids_pl_send_email_id",
+                  "type": "Expression"
+                },
+                "workspaceId": {
+                  "value": "@pipeline().DataFactory",
+                  "type": "Expression"
+                },
+                "parameters": {
+                  "email_address": {
+                    "value": "@pipeline().libraryVariables.vl_runtime_alert_email",
+                    "type": "Expression"
+                  },
+                  "email_subject": {
+                    "value": "WARNING: Metadata framework pipelines exceeded 2hr run time",
+                    "type": "Expression"
+                  },
+                  "email_body": {
+                    "value": "@concat(\n    'The following pipelines have completed successfully, but took over 2 hours to do so. They may require further evaluation.'\n    ,'</br>'\n    ,'</br>'\n    , join(\n        activity('Get list of abnormal completions').output.value\n        ,'</br></br>'\n    )\n)",
+                    "type": "Expression"
+                  },
+                  "execution_url": {
+                    "value": "@concat(\n    'https://app.powerbi.com/workloads/data-pipeline/monitoring/workspaces/',\n    pipeline().DataFactory,\n    '/pipelines/',\n    pipeline().PipelineName,\n    '/',\n    pipeline().RunId\n)",
+                    "type": "Expression"
+                  }
+                }
+              },
+              "externalReferences": {
+                "connection": "@pipeline().libraryVariables.vl_guids_fabric_pipeline_connection_id"
+              }
+            }
+          ],
+          "ifTrueActivities": []
+        }
+      }
+    ],
+    "parameters": {
+      "timeout_warning_minutes": {
+        "type": "string",
+        "defaultValue": "120"
+      },
+      "check_last_x_hours": {
+        "type": "string",
+        "defaultValue": "4"
+      }
+    },
+    "libraryVariables": {
+      "vl_runtime_alert_email": {
+        "type": "String",
+        "variableName": "alert_email",
+        "libraryName": "vl_runtime"
+      },
+      "vl_guids_metadata_control_db_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_connection_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_fabric_pipeline_connection_id": {
+        "type": "String",
+        "variableName": "fabric_pipeline_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_pl_send_email_id": {
+        "type": "String",
+        "variableName": "pl_send_email_id",
+        "libraryName": "vl_guids"
+      }
+    }
+  }
+}

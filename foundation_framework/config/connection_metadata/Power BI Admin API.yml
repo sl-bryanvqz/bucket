@@ -1,0 +1,13 @@
+connection_name: 'Power BI Admin API'
+uses_fabric_connection: False
+
+connection_settings:
+    authentication: "Service Principal"
+    authentication_base_url: "https://login.microsoftonline.com"
+    authentication_resource: "https://analysis.windows.net/powerbi/api"
+    akv_uri: "https://your-key-vault-name.vault.azure.net/"
+    tenant_id: "your-powerbi-sp-tenant-id-secret"
+    client_id: "your-powerbi-sp-client-id-secret"
+    client_secret: "your-powerbi-sp-client-secret"
+    grant_type: "client_credentials"
+    base_url: "https://api.powerbi.com/v1.0/myorg/admin"

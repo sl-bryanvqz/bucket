@@ -1,0 +1,36 @@
+object_name: 'AW Product'
+source_connection_id: 2
+enabled: 1
+
+source_system_settings:
+    source_type: "sql"
+    source_name: "AdventureWorks"
+    database_name: "sqldb-adventureworks"
+    schema_name: "SalesLT"
+    table_name: "Product"
+    primary_keys: ["ProductID"]
+    is_incremental: 0
+    partition_option: "None"
+
+extraction_template_settings:
+    template_type: "DataPipeline"
+    template_name: "pl_extract_sql"
+
+extraction_scheduling_settings:
+    schedule_type: 'time_of_day'
+    scheduled_times: ["10:00", "12:00", "14:00", "16:00"]
+    skip_if_running: true
+
+raw_settings:
+    target_file_path: "sqldb-adventureworks/SalesLT/Product"
+    target_file_name: "Product"
+    target_file_type: "parquet"
+
+bronze_settings:
+    schema_name: sqldb_adventureworks
+    table_name: SalesLT__Product
+
+silver_settings:
+    schema_name: sqldb_adventureworks
+    table_name: sales_lt__product
+    load_strategy: overwrite

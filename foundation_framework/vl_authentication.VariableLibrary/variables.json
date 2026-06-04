@@ -1,0 +1,29 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/variableLibrary/definition/variables/1.0.0/schema.json",
+  "variables": [
+    {
+      "name": "akv_uri",
+      "note": "",
+      "type": "String",
+      "value": "https://your-key-vault-name.vault.azure.net/"
+    },
+    {
+      "name": "tenant_id_secret_name",
+      "note": "",
+      "type": "String",
+      "value": "fabric-api-sp-tenant-id"
+    },
+    {
+      "name": "client_id_secret_name",
+      "note": "",
+      "type": "String",
+      "value": "fabric-api-sp-client-id"
+    },
+    {
+      "name": "client_secret_name",
+      "note": "",
+      "type": "String",
+      "value": "fabric-api-sp-clientsecret"
+    }
+  ]
+}

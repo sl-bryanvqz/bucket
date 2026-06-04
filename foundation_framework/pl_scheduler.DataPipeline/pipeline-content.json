@@ -1,0 +1,150 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "usp_get_tasks_due_for_execution",
+        "description": "Executes the [meta].[usp_get_tasks_due_for_execution] stored procedure that returns the metadata for all tasks that are scheduled as of the runtime of this pipeline",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderStoredProcedureName": "[meta].[usp_get_tasks_due_for_execution]",
+            "storedProcedureParameters": {
+              "stage": {
+                "type": "String",
+                "value": {
+                  "value": "@pipeline().parameters.stage",
+                  "type": "Expression"
+                }
+              }
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "firstRowOnly": false,
+          "datasetSettings": {
+            "annotations": [],
+            "connectionSettings": {
+              "name": "a5d4775a_e5a2_43a3_bce0_22a7f9df5298",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "@pipeline().DataFactory",
+                  "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                },
+                "externalReferences": {
+                  "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                }
+              }
+            },
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "typeProperties": {}
+          }
+        }
+      },
+      {
+        "name": "Check if there are tasks to execute",
+        "description": "If nothing is returned by the previous task, do nothing. Otherwise, pass all the metadata to pl_orchestrator to kick off the framework.",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "usp_get_tasks_due_for_execution",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@equals(activity('usp_get_tasks_due_for_execution').output.count,0)",
+            "type": "Expression"
+          },
+          "ifFalseActivities": [
+            {
+              "name": "pl_orchestrator",
+              "description": "Executes pl_orchestrator with all the metadata fetched for the run.",
+              "type": "InvokePipeline",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "waitOnCompletion": false,
+                "operationType": "InvokeFabricPipeline",
+                "pipelineId": {
+                  "value": "@pipeline().libraryVariables.vl_guids_pl_orchestrator_id",
+                  "type": "Expression"
+                },
+                "workspaceId": {
+                  "value": "@pipeline().DataFactory",
+                  "type": "Expression"
+                },
+                "parameters": {
+                  "limit_rows_for_debugging": false,
+                  "users_to_notify": {
+                    "value": "@pipeline().libraryVariables.vl_runtime_alert_email",
+                    "type": "Expression"
+                  },
+                  "tasks_to_execute": {
+                    "value": "@activity('usp_get_tasks_due_for_execution').output.value",
+                    "type": "Expression"
+                  }
+                }
+              },
+              "externalReferences": {
+                "connection": "@pipeline().libraryVariables.vl_guids_fabric_pipeline_connection_id"
+              }
+            }
+          ],
+          "ifTrueActivities": []
+        }
+      }
+    ],
+    "parameters": {
+      "stage": {
+        "type": "string"
+      }
+    },
+    "libraryVariables": {
+      "vl_guids_metadata_control_db_connection_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_runtime_alert_email": {
+        "type": "String",
+        "variableName": "alert_email",
+        "libraryName": "vl_runtime"
+      },
+      "vl_guids_fabric_pipeline_connection_id": {
+        "type": "String",
+        "variableName": "fabric_pipeline_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_pl_orchestrator_id": {
+        "type": "String",
+        "variableName": "pl_orchestrator_id",
+        "libraryName": "vl_guids"
+      }
+    }
+  }
+}

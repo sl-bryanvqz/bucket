@@ -1,0 +1,6 @@
+connection_name: 'Northwind API'
+uses_fabric_connection: False
+
+connection_settings:
+    authentication: "None"
+    base_url: "https://demodata.grapecity.com/northwind/odata/v1/"

@@ -1,0 +1,5 @@
+connection_name: 'fabric_foundation_control_db_dev'
+uses_fabric_connection: True
+
+connection_settings:
+    fabric_connection_id: "99c846a7-1512-4181-8372-38bec39baf46"

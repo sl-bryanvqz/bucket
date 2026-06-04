@@ -1,0 +1,8 @@
+connection_name: 'Regres API - PL'
+uses_fabric_connection: True
+
+connection_settings:
+    fabric_connection_id: "70c5bff0-b1fe-4704-8f93-a1349e3f7100"
+    authentication: "API Key"
+    api_key: "reqres-free-v1"
+    base_url: "https://reqres.in/api"

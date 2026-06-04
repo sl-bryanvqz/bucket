@@ -1,0 +1,694 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "Extract SQL",
+        "description": "Copies data from SQL server to bronze lakehouse",
+        "type": "Copy",
+        "dependsOn": [
+          {
+            "activity": "Set sql_query",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Copy row count for audit",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderQuery": {
+              "value": "@variables('sql_query')",
+              "type": "Expression"
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None",
+            "datasetSettings": {
+              "annotations": [],
+              "connectionSettings": {
+                "name": "a8093e9f_304b_4e5f_8b54_57823bc03605",
+                "properties": {
+                  "annotations": [],
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().DataFactory",
+                    "artifactId": "@json(string(pipeline().parameters.source_settings)).sql_db_id"
+                  },
+                  "externalReferences": {
+                    "connection": "@json(string(pipeline().parameters.source_connection_settings)).fabric_connection_id"
+                  }
+                }
+              },
+              "type": "FabricSqlDatabaseTable",
+              "schema": [],
+              "typeProperties": {}
+            }
+          },
+          "sink": {
+            "type": "ParquetSink",
+            "storeSettings": {
+              "type": "AzureBlobStorageWriteSettings"
+            },
+            "formatSettings": {
+              "type": "ParquetWriteSettings",
+              "enableVertiParquet": true
+            },
+            "datasetSettings": {
+              "annotations": [],
+              "linkedService": {
+                "name": "e9541c62_37b0_4678_8473_a9ac25b91fa6",
+                "properties": {
+                  "annotations": [],
+                  "type": "Lakehouse",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().libraryVariables.vl_guids_bronze_workspace_id",
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_bronze_lakehouse_id",
+                    "rootFolder": "Files"
+                  }
+                }
+              },
+              "type": "Parquet",
+              "typeProperties": {
+                "location": {
+                  "type": "LakehouseLocation",
+                  "folderPath": {
+                    "value": "@concat(\n    'incoming/',\n    json(string(pipeline().parameters.target_settings)).target_file_path,\n    '/',\n    formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'),\n    '/lineage_id=',\n    pipeline().parameters.lineage_id\n\n)",
+                    "type": "Expression"
+                  }
+                },
+                "compressionCodec": "snappy"
+              },
+              "schema": []
+            }
+          },
+          "enableStaging": false,
+          "translator": {
+            "type": "TabularTranslator",
+            "typeConversion": true,
+            "typeConversionSettings": {
+              "allowDataTruncation": true,
+              "treatBooleanAsNumber": false
+            }
+          }
+        }
+      },
+      {
+        "name": "usp_set_custom_log__extract_sql",
+        "description": "Updates the log_data field in the logging.task_executions table",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "Extract SQL",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "storedProcedureName": "[logging].[usp_set_custom_log__extract_sql]",
+          "storedProcedureParameters": {
+            "task_executions_id": {
+              "value": {
+                "value": "@pipeline().parameters.task_executions_id",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "source_fabric_connection_id": {
+              "value": {
+                "value": "@json(string(pipeline().parameters.source_connection_settings)).fabric_connection_id",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "source_database_name": {
+              "value": {
+                "value": "@json(string(pipeline().parameters.source_settings)).database_name",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "source_table_name": {
+              "value": {
+                "value": "@json(string(pipeline().parameters.source_settings)).table_name",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "target_file_name": {
+              "value": {
+                "value": "@concat(\n    json(string(pipeline().parameters.target_settings)).target_file_name,\n    '.',\n    json(string(pipeline().parameters.target_settings)).target_file_type\n)",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "target_file_path": {
+              "value": {
+                "value": "@concat(\n    json(string(pipeline().parameters.target_settings)).target_file_path,\n    '/',\n    formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd')\n)",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "target_lakehouse_id": {
+              "value": {
+                "value": "@pipeline().libraryVariables.vl_guids_bronze_lakehouse_id",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "target_workspace_id": {
+              "value": {
+                "value": "@pipeline().libraryVariables.vl_guids_bronze_workspace_id",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "source_schema_name": {
+              "value": {
+                "value": "@json(string(pipeline().parameters.source_settings)).schema_name",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "sql_query": {
+              "value": {
+                "value": "@variables('sql_query')",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        },
+        "connectionSettings": {
+          "name": "fbee9c7c_03be_4833_bdff_9e09841f18d2",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "@pipeline().DataFactory",
+              "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+            },
+            "externalReferences": {
+              "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+            }
+          }
+        }
+      },
+      {
+        "name": "Set sql_query",
+        "description": "Uses output of previous activities to concatenate a SELECT + column list + WHERE clause",
+        "type": "SetVariable",
+        "dependsOn": [
+          {
+            "activity": "Set sql_where_predicate",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "variableName": "sql_query",
+          "value": {
+            "value": "@concat(\n    if(\n        pipeline().parameters.limit_rows_for_debugging,\n        'select top 1000 *',\n        'select *'\n    ),\n    if(\n        equals(json(string(pipeline().parameters.source_settings)).partition_option, 'DynamicRange'),\n        concat(', ', json(string(pipeline().parameters.source_settings)).partition_column_name, ' AS dynamic_partition_column'),\n        ''\n    ),\n    ' from ',\n    json(string(pipeline().parameters.source_settings)).schema_name ,'.', json(string(pipeline().parameters.source_settings)).table_name,\n    ' where 1 = 1 ',\n    if(\n        equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n        concat(' and ', variables('sql_where_predicate')),\n        ''\n    ),\n    if(\n        equals(json(string(pipeline().parameters.source_settings)).partition_option, 'DynamicRange'),\n        ' and ?DfDynamicRangePartitionCondition',\n        ''\n    )\n)",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "usp_get_previous_watermark_val",
+        "description": "Retrieves previous watermark value from the logging.execution_watermark table",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderStoredProcedureName": "[integration].[usp_get_previous_watermark_val]",
+            "storedProcedureParameters": {
+              "task_id": {
+                "type": "Int16",
+                "value": {
+                  "value": "@pipeline().parameters.task_id",
+                  "type": "Expression"
+                }
+              },
+              "incremental_col_data_type": {
+                "type": "String",
+                "value": {
+                  "value": "@json(string(pipeline().parameters.source_settings)).incremental_col_data_type",
+                  "type": "Expression"
+                }
+              }
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "datasetSettings": {
+            "annotations": [],
+            "connectionSettings": {
+              "name": "d46a3dc8_6bb1_4434_aa3c_3e4b042ef4fd",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "@pipeline().DataFactory",
+                  "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                },
+                "externalReferences": {
+                  "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                }
+              }
+            },
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "typeProperties": {}
+          }
+        }
+      },
+      {
+        "name": "Get current watermark from source",
+        "description": "Queries MAX(incremental column) in the source table to get the current watermark value",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderQuery": {
+              "value": "@concat(concat(concat(concat(concat(\n    'SELECT MAX(' , json(string(pipeline().parameters.source_settings)).incremental_column\n    ), ') as current_watermark_val FROM '), \n    json(string(pipeline().parameters.source_settings)).schema_name)\n    ,'.')\n    ,json(string(pipeline().parameters.source_settings)).table_name\n)",
+              "type": "Expression"
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "firstRowOnly": true,
+          "datasetSettings": {
+            "annotations": [],
+            "connectionSettings": {
+              "name": "ea58d913_66c2_4da7_9c83_e3e03a9c270f",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "@pipeline().DataFactory",
+                  "artifactId": "@json(string(pipeline().parameters.source_settings)).sql_db_id"
+                },
+                "externalReferences": {
+                  "connection": "@json(string(pipeline().parameters.source_connection_settings)).fabric_connection_id"
+                }
+              }
+            },
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "typeProperties": {}
+          }
+        }
+      },
+      {
+        "name": "Set sql_where_predicate",
+        "description": "2 incremental data types are allowed: int or datetime. Create the WHERE clause based on the data type, because a datetime type needs string manipulation via TO_TIMESTAMP",
+        "type": "Switch",
+        "dependsOn": [
+          {
+            "activity": "usp_get_previous_watermark_val",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Get current watermark from source",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "on": {
+            "value": "@json(string(pipeline().parameters.source_settings)).incremental_col_data_type",
+            "type": "Expression"
+          },
+          "cases": [
+            {
+              "value": "datetime",
+              "activities": [
+                {
+                  "name": "Set sql_where_predicate datetime",
+                  "description": "Sets value of WHERE clause using date string manipulation",
+                  "type": "SetVariable",
+                  "dependsOn": [],
+                  "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "typeProperties": {
+                    "variableName": "sql_where_predicate",
+                    "value": {
+                      "value": "@if(\n    equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n    concat(\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' > ''',\n        formatDateTime(activity('usp_get_previous_watermark_val').output.firstRow.previous_watermark_val, 'yyyy-MM-dd HH:mm:ss.fff'),\n        ''' and ',\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' <= ''',\n        formatDateTime(activity('Get current watermark from source').output.firstRow.current_watermark_val, 'yyyy-MM-dd HH:mm:ss.fff'),\n        ''''\n    ),\n    null\n)",
+                      "type": "Expression"
+                    }
+                  }
+                },
+                {
+                  "name": "Set row_count_sql_where_predicate",
+                  "description": "Sets value of WHERE clause using date string manipulation",
+                  "type": "SetVariable",
+                  "dependsOn": [],
+                  "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "typeProperties": {
+                    "variableName": "row_count_sql_where_predicate",
+                    "value": {
+                      "value": "@if(\n    equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n    concat(\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' <= ''',\n        formatDateTime(activity('Get current watermark from source').output.firstRow.current_watermark_val, 'yyyy-MM-dd HH:mm:ss.fff'),\n        ''''\n    ),\n    null\n)",
+                      "type": "Expression"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "value": "int",
+              "activities": [
+                {
+                  "name": "Set sql_where_predicate INT",
+                  "description": "Sets WHERE clause using standard INT value",
+                  "type": "SetVariable",
+                  "dependsOn": [],
+                  "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "typeProperties": {
+                    "variableName": "sql_where_predicate",
+                    "value": {
+                      "value": "@if(\n    equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n    concat(\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' > ',\n        activity('usp_get_previous_watermark_val').output.firstRow.previous_watermark_val,\n        ' and ',\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' <= ',\n        activity('Get current watermark from source').output.firstRow.current_watermark_val\n    ),\n    null\n)",
+                      "type": "Expression"
+                    }
+                  }
+                },
+                {
+                  "name": "Set sql_where_predicate INT_copy1",
+                  "description": "Sets WHERE clause using standard INT value",
+                  "type": "SetVariable",
+                  "dependsOn": [],
+                  "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "typeProperties": {
+                    "variableName": "row_count_sql_where_predicate",
+                    "value": {
+                      "value": "@if(\n    equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n    concat(\n        json(string(pipeline().parameters.source_settings)).incremental_column,\n        ' <= ',\n        activity('Get current watermark from source').output.firstRow.current_watermark_val\n    ),\n    null\n)",
+                      "type": "Expression"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "defaultActivities": []
+        }
+      },
+      {
+        "name": "Check if incremental loading is required for logging",
+        "description": "Only if an incremental load is required do we need to go back and update the watermark table.",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Extract SQL",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@if(equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),true,false)",
+            "type": "Expression"
+          },
+          "ifFalseActivities": [],
+          "ifTrueActivities": [
+            {
+              "name": "Update usp_update_watermark_val",
+              "description": "Update the watermark value in logging.execution_watermark with the new value created in this execution",
+              "type": "SqlServerStoredProcedure",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "storedProcedureName": "[logging].[usp_update_watermark_val]",
+                "storedProcedureParameters": {
+                  "task_id": {
+                    "value": {
+                      "value": "@pipeline().parameters.task_id",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "source_table": {
+                    "value": {
+                      "value": "@json(string(pipeline().parameters.source_settings)).table_name",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "incremental_column": {
+                    "value": {
+                      "value": "@json(string(pipeline().parameters.source_settings)).incremental_column",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "watermark_value": {
+                    "value": {
+                      "value": "@activity('Get current watermark from source').output.firstRow.current_watermark_val",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "parent_run_id": {
+                    "value": {
+                      "value": "@pipeline().parameters.parent_run_id",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  }
+                }
+              },
+              "connectionSettings": {
+                "name": "fbee9c7c_03be_4833_bdff_9e09841f18d2",
+                "properties": {
+                  "annotations": [],
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().DataFactory",
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                  },
+                  "externalReferences": {
+                    "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Copy row count for audit",
+        "description": "Copies row count for auditing purposes",
+        "type": "Copy",
+        "dependsOn": [
+          {
+            "activity": "Set sql_where_predicate",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderQuery": {
+              "value": "@concat(concat(concat(concat(concat(concat(\n    concat(concat(concat(concat(concat(concat(concat(concat(concat(concat(concat('SELECT ',pipeline().parameters.task_id),' as extract_task_id, NULL as bronze_task_id, NULL as silver_task_id, ''fabric-sql'' as source_system, '''), json(string(pipeline().parameters.source_settings)).schema_name), '.'), json(string(pipeline().parameters.source_settings)).table_name), ''' as source_table, COUNT(*) as source_row_count, NULL as bronze_lh_row_count, NULL as silver_lh_row_count, '), json(string(pipeline().parameters.source_settings)).is_incremental), ' as is_incremental, '''), pipeline().parameters.parent_run_id), ''' as parent_run_id, ''NOT STARTED'' as bronze_run_status, NULL as bronze_run_task_executions_id, ''NOT STARTED'' as silver_run_status, NULL as silver_run_task_executions_id, '''), utcNow()), ''' as ingestion_timestamp FROM ')\n,json(string(pipeline().parameters.source_settings)).schema_name),'.'), json(string(pipeline().parameters.source_settings)).table_name),' WHERE 1=1 '),\n    if(\n        equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1),\n        concat(' and ', variables('row_count_sql_where_predicate')),\n        ''\n    ))",
+              "type": "Expression"
+            },
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None",
+            "datasetSettings": {
+              "annotations": [],
+              "connectionSettings": {
+                "name": "ac146cf7_e74f_4605_a999_8649ca39c1dd",
+                "properties": {
+                  "annotations": [],
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().DataFactory",
+                    "artifactId": "@json(string(pipeline().parameters.source_settings)).sql_db_id"
+                  },
+                  "externalReferences": {
+                    "connection": "@json(string(pipeline().parameters.source_connection_settings)).fabric_connection_id"
+                  }
+                }
+              },
+              "type": "FabricSqlDatabaseTable",
+              "schema": [],
+              "typeProperties": {}
+            }
+          },
+          "sink": {
+            "type": "FabricSqlDatabaseSink",
+            "writeBehavior": "insert",
+            "sqlWriterUseTableLock": false,
+            "datasetSettings": {
+              "annotations": [],
+              "connectionSettings": {
+                "name": "ba2e5cb2_4b12_40a3_a292_8a2e41c93ac9",
+                "properties": {
+                  "annotations": [],
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().DataFactory",
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                  },
+                  "externalReferences": {
+                    "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                  }
+                }
+              },
+              "type": "FabricSqlDatabaseTable",
+              "schema": [],
+              "typeProperties": {
+                "schema": "logging",
+                "table": "row_count_audit"
+              }
+            }
+          },
+          "enableStaging": false,
+          "translator": {
+            "type": "TabularTranslator",
+            "typeConversion": true,
+            "typeConversionSettings": {
+              "allowDataTruncation": true,
+              "treatBooleanAsNumber": false
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "source_settings": {
+        "type": "string"
+      },
+      "target_settings": {
+        "type": "string"
+      },
+      "source_connection_settings": {
+        "type": "string"
+      },
+      "lineage_id": {
+        "type": "string"
+      },
+      "current_watermark_datetime": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "limit_rows_for_debugging": {
+        "type": "bool"
+      },
+      "task_executions_id": {
+        "type": "string"
+      },
+      "parent_run_id": {
+        "type": "string"
+      }
+    },
+    "variables": {
+      "sql_where_predicate": {
+        "type": "String"
+      },
+      "sql_query": {
+        "type": "String"
+      },
+      "row_count_sql_where_predicate": {
+        "type": "String"
+      }
+    },
+    "libraryVariables": {
+      "vl_guids_bronze_workspace_id": {
+        "type": "String",
+        "variableName": "bronze_workspace_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_bronze_lakehouse_id": {
+        "type": "String",
+        "variableName": "bronze_lakehouse_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_connection_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_database": {
+        "type": "String",
+        "variableName": "metadata_control_db_database",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_id",
+        "libraryName": "vl_guids"
+      }
+    }
+  }
+}

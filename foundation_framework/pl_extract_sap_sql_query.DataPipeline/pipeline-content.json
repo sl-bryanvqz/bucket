@@ -1,0 +1,575 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "FabricSqlDatabaseSource",
+            "sqlReaderStoredProcedureName": "[meta].[usp_sql_query_parser]",
+            "storedProcedureParameters": {
+              "source_settings": {
+                "value": {
+                  "value": "@string(pipeline().parameters.source_settings)",
+                  "type": "Expression"
+                },
+                "type": "String"
+              },
+              "task_id": {
+                "value": {
+                  "value": "@pipeline().parameters.task_id",
+                  "type": "Expression"
+                },
+                "type": "String"
+              }
+            },
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00"
+          },
+          "datasetSettings": {
+            "type": "FabricSqlDatabaseTable",
+            "schema": [],
+            "connectionSettings": {
+              "name": "20c2693a_4fd9_4627_b55e_7c9384c5c46f",
+              "properties": {
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id",
+                  "workspaceId": "@pipeline().DataFactory"
+                },
+                "externalReferences": {
+                  "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                },
+                "annotations": []
+              }
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "SAP SQL Query Parser",
+        "description": "Parses source_settings' SQL query and updates tokens.",
+        "dependsOn": []
+      },
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "sql_query",
+          "value": {
+            "value": "@activity('SAP SQL Query Parser').output.firstRow.resolved_source_query",
+            "type": "Expression"
+          }
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "SQL Output",
+        "description": "Set the sql_query variable using the value created by the previous activity.",
+        "dependsOn": [
+          {
+            "activity": "SAP SQL Query Parser",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[logging].[usp_set_log_data]",
+          "storedProcedureParameters": {
+            "task_executions_id": {
+              "value": {
+                "value": "@pipeline().parameters.task_executions_id",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "log_data_string": {
+              "value": {
+                "value": "@string(pipeline().parameters.source_settings)",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        },
+        "connectionSettings": {
+          "name": "ba00d371_4baa_45b1_b442_15d7a8507df9",
+          "properties": {
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id",
+              "workspaceId": "@pipeline().DataFactory"
+            },
+            "externalReferences": {
+              "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "usp_set_log_data",
+        "description": "Updates the log_data field in the logging.task_executions table",
+        "dependsOn": [
+          {
+            "activity": "check_if_watermark_update",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "IfCondition",
+        "typeProperties": {
+          "expression": {
+            "value": "@if(equals(json(string(pipeline().parameters.source_settings)).is_incremental, 1), not(equals(activity('Copy SAP data').output.rowsCopied,0)),false)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": {
+                  "value": "[logging].[usp_update_watermark_val]",
+                  "type": "Expression"
+                },
+                "storedProcedureParameters": {
+                  "task_id": {
+                    "value": {
+                      "value": "@pipeline().parameters.task_id",
+                      "type": "Expression"
+                    },
+                    "type": "Int16"
+                  },
+                  "source_table": {
+                    "value": {
+                      "value": "@json(string(pipeline().parameters.source_settings)).table_name",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "incremental_column": {
+                    "value": {
+                      "value": "@json(string(pipeline().parameters.source_settings)).values.incremental_column",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "watermark_value": {
+                    "value": {
+                      "value": "@json(activity('get max watermark').output.result.exitValue).max_incremental",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "parent_run_id": {
+                    "value": {
+                      "value": "@pipeline().parameters.parent_run_id",
+                      "type": "Expression"
+                    },
+                    "type": "Guid"
+                  }
+                }
+              },
+              "connectionSettings": {
+                "name": "c5810518_f886_41d6_a28b_31492c10c237",
+                "properties": {
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id",
+                    "workspaceId": "@pipeline().DataFactory"
+                  },
+                  "externalReferences": {
+                    "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "sp_update_watermark",
+              "description": "Update the watermark value in logging.execution_watermark with the new value created by the previous notebook",
+              "dependsOn": [
+                {
+                  "activity": "get max watermark",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "6ff31b98-0f4f-8cb2-47ed-cd298e3c2a60",
+                "workspaceId": "00000000-0000-0000-0000-000000000000",
+                "parameters": {
+                  "task_id": {
+                    "value": {
+                      "value": "@pipeline().parameters.task_id",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  },
+                  "bronze_workspace_id": {
+                    "value": {
+                      "value": "@pipeline().libraryVariables.vl_guids_bronze_workspace_id",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  },
+                  "bronze_lakehouse_id": {
+                    "value": {
+                      "value": "@pipeline().libraryVariables.vl_guids_bronze_lakehouse_id",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  },
+                  "target_file_path": {
+                    "value": {
+                      "value": "@concat(\n    'incoming/',\n    json(string(pipeline().parameters.target_settings)).target_file_path,\n    '/',\n    formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'),\n    '/lineage_id=',\n    pipeline().parameters.lineage_id\n\n)",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  },
+                  "target_file_name": {
+                    "value": {
+                      "value": "@concat(json(string(pipeline().parameters.target_settings)).target_file_name,'.parquet')",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  },
+                  "incremental_field": {
+                    "value": {
+                      "value": "@json(string(pipeline().parameters.source_settings)).values.incremental_column",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  }
+                }
+              },
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "get max watermark",
+              "description": "Uses the notebook to dynamically determine the watermark value of the new ingestion",
+              "dependsOn": []
+            }
+          ],
+          "ifFalseActivities": []
+        },
+        "name": "check_if_watermark_update",
+        "description": "This checks if the watermark in the table should be updated.",
+        "dependsOn": [
+          {
+            "activity": "Copy SAP data",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Copy",
+        "typeProperties": {
+          "source": {
+            "type": "SapHanaSource",
+            "query": {
+              "value": "@variables('sql_query')",
+              "type": "Expression"
+            },
+            "partitionOption": "None",
+            "datasetSettings": {
+              "type": "SapHanaTable",
+              "schema": [],
+              "externalReferences": {
+                "connection": "@json(string(pipeline().parameters.source_connection_settings)).sap_connection_id "
+              },
+              "annotations": []
+            }
+          },
+          "sink": {
+            "type": "ParquetSink",
+            "formatSettings": {
+              "type": "ParquetWriteSettings",
+              "enableVertiParquet": true
+            },
+            "storeSettings": {
+              "type": "AzureBlobStorageWriteSettings"
+            },
+            "datasetSettings": {
+              "type": "Parquet",
+              "typeProperties": {
+                "location": {
+                  "type": "LakehouseLocation",
+                  "folderPath": {
+                    "value": "@concat(\n    'incoming/',\n    json(string(pipeline().parameters.target_settings)).target_file_path,\n    '/',\n    formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'),\n    '/lineage_id=',\n    pipeline().parameters.lineage_id\n\n)",
+                    "type": "Expression"
+                  },
+                  "fileName": {
+                    "value": "@concat(json(string(pipeline().parameters.target_settings)).target_file_name,'.parquet')",
+                    "type": "Expression"
+                  }
+                },
+                "compressionCodec": "snappy"
+              },
+              "schema": [],
+              "connectionSettings": {
+                "name": "9ebe909f_a6a9_4d18_90db_b7a248857f2a",
+                "properties": {
+                  "type": "Lakehouse",
+                  "typeProperties": {
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_bronze_lakehouse_id",
+                    "workspaceId": "@pipeline().libraryVariables.vl_guids_bronze_workspace_id",
+                    "rootFolder": "Files"
+                  },
+                  "externalReferences": {
+                    "connection": "@pipeline().libraryVariables.vl_guids_lakehouse_connection_id"
+                  },
+                  "annotations": []
+                }
+              },
+              "annotations": []
+            }
+          },
+          "translator": {
+            "type": "TabularTranslator",
+            "typeConversion": true,
+            "typeConversionSettings": {
+              "allowDataTruncation": true,
+              "treatBooleanAsNumber": false
+            }
+          },
+          "enableStaging": false
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 3,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Copy SAP data",
+        "description": "Copies data from SAP server",
+        "dependsOn": [
+          {
+            "activity": "SQL Output",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "SapHanaSource",
+            "query": {
+              "value": "@concat(\n    'with cte as ('\n    , variables('sql_query')\n    ,') select count(*) as SOURCE_ROW_COUNT from cte'\n)",
+              "type": "Expression"
+            },
+            "partitionOption": "None"
+          },
+          "datasetSettings": {
+            "type": "SapHanaTable",
+            "schema": [],
+            "externalReferences": {
+              "connection": "@json(string(pipeline().parameters.source_connection_settings)).sap_connection_id "
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.00:30:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Get row count from source",
+        "description": "Get the row count value from source for auditing",
+        "dependsOn": [
+          {
+            "activity": "SQL Output",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[logging].[usp_log_insert_row_count_audit]",
+          "storedProcedureParameters": {
+            "task_id": {
+              "value": {
+                "value": "@pipeline().parameters.task_id",
+                "type": "Expression"
+              },
+              "type": "Int16"
+            },
+            "source_system": {
+              "value": "sap",
+              "type": "String"
+            },
+            "source_table_name": {
+              "value": {
+                "value": "@concat(json(string(pipeline().parameters.source_settings)).table_name)",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "source_row_count": {
+              "value": {
+                "value": "@activity('Get row count from source').output.firstRow.SOURCE_ROW_COUNT",
+                "type": "Expression"
+              },
+              "type": "Double"
+            },
+            "is_incremental": {
+              "value": {
+                "value": "@json(string(pipeline().parameters.source_settings)).is_incremental",
+                "type": "Expression"
+              },
+              "type": "Int16"
+            },
+            "parent_run_id": {
+              "value": {
+                "value": "@pipeline().parameters.parent_run_id",
+                "type": "Expression"
+              },
+              "type": "Guid"
+            }
+          }
+        },
+        "connectionSettings": {
+          "name": "4ef71aaf_01be_417e_8c00_b511626fb99a",
+          "properties": {
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id",
+              "workspaceId": "@pipeline().DataFactory"
+            },
+            "externalReferences": {
+              "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 3,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Write row count to audit table",
+        "description": "Inserts row counts from source into logging.row_count_audit table",
+        "dependsOn": [
+          {
+            "activity": "Get row count from source",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      }
+    ],
+    "parameters": {
+      "source_settings": {
+        "type": "string"
+      },
+      "source_connection_settings": {
+        "type": "string"
+      },
+      "target_settings": {
+        "type": "string"
+      },
+      "lineage_id": {
+        "type": "string"
+      },
+      "current_watermark_datetime": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "limit_rows_for_debugging": {
+        "type": "bool"
+      },
+      "task_executions_id": {
+        "type": "string"
+      },
+      "parent_run_id": {
+        "type": "string"
+      }
+    },
+    "libraryVariables": {
+      "vl_guids_bronze_workspace_id": {
+        "type": "String",
+        "variableName": "bronze_workspace_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_bronze_lakehouse_id": {
+        "type": "String",
+        "variableName": "bronze_lakehouse_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_connection_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_database": {
+        "type": "String",
+        "variableName": "metadata_control_db_database",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_lakehouse_connection_id": {
+        "type": "String",
+        "variableName": "lakehouse_connection_id",
+        "libraryName": "vl_guids"
+      }
+    },
+    "variables": {
+      "sql_query": {
+        "type": "String"
+      },
+      "watermark_query": {
+        "type": "String"
+      }
+    }
+  }
+}
