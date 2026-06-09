@@ -1,0 +1,77 @@
+tables:
+  - object_name: "ADUsers"
+    enabled: "true"
+    file_hash: ""
+    data_product: "NRFC"
+
+    stage:
+      - "Extract"
+      - "Load to bronze"
+      - "Load to silver"
+
+    enable_retries: true
+    max_retry_attempts: 3
+
+    template_settings:
+      - extract:
+          template_type: "DataPipeline"
+          template_name: "pl_extract_sql"
+      - load_to_bronze:
+          template_type: "Notebook"
+          template_name: "nb_load_to_bronze"
+      - load_to_silver:
+          template_type: "Notebook"
+          template_name: "nb_load_to_silver"
+
+    option_settings:
+
+    source_connections:
+      - extract:
+          source_connection_name: "sql_canada_rmdrplus"
+
+    scheduling_settings:
+      - extract:
+          schedule_type: "interval"
+          frequency_minutes: 1
+          skip_if_running: true
+
+    source_settings:
+      - extract:
+          task_name: "Extract ADUsers"
+          sql_db_id: "<YOUR sql_canada_rmdrplus item id>"
+          database_name: "sql_canada_rmdrplus"
+          schema_name: "AD"
+          table_name: "ADUsers"
+          is_incremental: 0
+          partition_option: "None"
+          primary_keys:
+            - "ADUsersID"
+
+      - load_to_bronze:
+          task_name: "Load to bronze - ADUsers"
+          target_file_path: "sql_canada_rmdrplus/AD/ADUsers"
+          target_file_name: "ADUsers"
+          target_file_type: "parquet"
+
+      - load_to_silver:
+          task_name: "Load to silver - ADUsers"
+          schema_name: "dbo"
+          table_name: "silver_ad_adusers"
+
+    target_settings:
+      - extract:
+          target_file_path: "sql_canada_rmdrplus/AD/ADUsers"
+          target_file_name: "ADUsers"
+          target_file_type: "parquet"
+
+      - load_to_bronze:
+          schema_name: "ad"
+          table_name: "adusers"
+          load_strategy: "overwrite"
+
+      - load_to_silver:
+          schema_name: "dbo"
+          table_name: "silver_ad_adusers"
+          load_strategy: "overwrite"
+          primary_keys:
+            - "ADUsersID"
