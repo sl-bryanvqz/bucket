@@ -1,0 +1,25 @@
+From your current snapshot, these IDs are already present:
+
+metadata_control_db_connection_id = 99c846a7-1512-4181-8372-38bec39baf46
+
+metadata_control_db_id = a1cf74aa-f3ed-b93a-4866-bb27c28c94da
+
+metadata_control_db_server = hbvkj6b5fvzenlsxgtupezx6wq-r7jo2muf3hfu7jcblkw3jppcmq.database.fabric.microsoft.com
+
+metadata_control_db_database = metadata_control_db-f6ae279c-6256-459e-9f8b-54d456c3456a
+
+bronze_workspace_id = a7ad27b1-6ad7-440f-bf78-030662ef90fd
+
+bronze_lakehouse_id = 13d70bbc-f54f-b035-467f-e87f14e4e167
+
+silver_workspace_id = a7ad27b1-6ad7-440f-bf78-030662ef90fd
+
+silver_lakehouse_id = 13d70bbc-f54f-b035-467f-e87f14e4e167
+
+Promoted artifact logical IDs in repo:
+
+sql_canada_rmdrplus = c3ba8c66-2159-9b5a-435f-aab6cb5f170d
+pl_extract_sql = 34c4207a-fa72-b7b7-4e44-caf7ed6dfd56
+nb_load_to_bronze = 99a92f46-93f7-8af7-4557-e984ee312770
+nb_load_to_silver = 16e0ed73-3548-9f27-47fc-e302211db749
+nb_json_utility_functions = bca0b1df-451f-8fc6-4220-3993b8367b21
