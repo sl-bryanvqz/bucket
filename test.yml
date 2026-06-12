@@ -1,0 +1,73 @@
+SELECT CONCAT(
+    '[',
+    STRING_AGG(
+        CONCAT(
+            '{',
+                '"task_id":', CAST(task_id AS varchar(20)), ',',
+                '"task_name":', QUOTENAME(STRING_ESCAPE(task_name, 'json'), '"'), ',',
+                '"source_connection_settings":', CAST(source_connection_settings AS nvarchar(max)), ',',
+                '"source_settings":', CAST(source_settings AS nvarchar(max)), ',',
+                '"target_settings":', CAST(target_settings AS nvarchar(max)), ',',
+                '"template_settings":', CAST(template_settings AS nvarchar(max)), ',',
+                '"lineage_id":"44444444-4444-4444-aaaa-aaaaaaaaaaaa",',
+                '"task_executions_id":"55555555-5555-5555-aaaa-aaaaaaaaaaaa"',
+            '}'
+        ),
+        ','
+    ),
+    ']'
+) AS tasks_to_execute_json
+FROM meta.task_metadata
+WHERE task_id = 1;
+
+SELECT
+    CONCAT(
+        '[',
+        '{',
+            '"task_id":', CAST(task_id AS varchar(20)), ',',
+            '"task_name":', QUOTENAME(STRING_ESCAPE(task_name, 'json'), '"'), ',',
+            '"source_connection_settings":', CAST(source_connection_settings AS nvarchar(max)), ',',
+            '"source_settings":', CAST(source_settings AS nvarchar(max)), ',',
+            '"target_settings":', CAST(target_settings AS nvarchar(max)), ',',
+            '"template_settings":', CAST(template_settings AS nvarchar(max)), ',',
+            '"lineage_id":"44444444-4444-4444-aaaa-aaaaaaaaaaaa",',
+            '"task_executions_id":"55555555-5555-5555-aaaa-aaaaaaaaaaaa"',
+        '}',
+        ']'
+    ) AS tasks_to_execute_json
+FROM meta.task_metadata
+WHERE task_id = 1;
+
+[
+  {
+    "task_id": 1,
+    "task_name": "Extract ADUsers",
+    "source_connection_settings": {
+      "fabric_connection_id": "f00d4cf5-3546-4d79-89c3-a9c233f2d33e"
+    },
+    "source_settings": {
+      "sql_db_id": "70dbd8b5-61de-4f80-ab87-9af560d4a919",
+      "database_name": "sql_canada_rmdrplus",
+      "schema_name": "AD",
+      "table_name": "ADUsers",
+      "is_incremental": 0,
+      "partition_option": "None",
+      "incremental_column": "ADUsersID",
+      "incremental_col_data_type": "int",
+      "primary_keys": [
+        "ADUsersID"
+      ]
+    },
+    "target_settings": {
+      "target_file_path": "sql_canada_rmdrplus/AD/ADUsers",
+      "target_file_name": "ADUsers",
+      "target_file_type": "parquet"
+    },
+    "template_settings": {
+      "template_type": "DataPipeline",
+      "template_name": "pl_extract_sql"
+    },
+    "lineage_id": "44444444-4444-4444-aaaa-aaaaaaaaaaaa",
+    "task_executions_id": "55555555-5555-5555-aaaa-aaaaaaaaaaaa"
+  }
+]
