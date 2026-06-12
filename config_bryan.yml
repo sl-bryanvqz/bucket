@@ -1,0 +1,45 @@
+tables:
+  - object_name: "RMDRPlus ADUsers"
+    stage:
+      - "Extract"
+    enabled: "true"
+    enable_retries: false
+    max_retry_attempts: 0
+
+    source_connections:
+      - Extract:
+          source_connection_name: "sql_canada_rmdrplus"
+
+    source_settings:
+      - Extract:
+          task_name: "Extract ADUsers"
+          sql_db_id: "11a7b18e-36dc-4246-96a8-de474bd2dc67"
+          database_name: "sql_canada_rmdrplus"
+          schema_name: "AD"
+          table_name: "ADUsers"
+          is_incremental: 0
+          partition_option: "None"
+          incremental_column: "ADUsersID"
+          incremental_col_data_type: "int"
+          primary_keys:
+            - "ADUsersID"
+
+    target_settings:
+      - Extract:
+          task_name: "Extract ADUsers"
+          target_file_path: "sql_canada_rmdrplus/AD/ADUsers"
+          target_file_name: "ADUsers"
+
+    template_settings:
+      - Extract:
+          template_type: "DataPipeline"
+          template_name: "pl_extract_sql"
+
+    scheduling_settings:
+      - Extract:
+          schedule_type: "interval"
+          frequency_minutes: 1
+          skip_if_running: true
+
+    option_settings:
+      - Extract: {}
