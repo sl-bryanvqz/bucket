@@ -1,25 +1,98 @@
-efi_df = spark.sql(f"""
+import re
+import pyspark.sql.functions as F
+
+source_schema = "base_transactional"
+source_table = "efi"
+
+target_schema = "curated_transactional"
+target_table = "efi"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
+location_path = f"Files/{target_schema}/{target_table}"
+
+tbl_properties = """
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite'     = 'true',
+    'delta.autoOptimize.autoCompact'       = 'true',
+    'delta.logRetentionDuration'           = 'interval 30 days',
+    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
+)
+"""
+
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
+    efi_key                             BIGINT,
+    unit                                STRING,
+    company_key                         BIGINT,
+    member_firm_code                    STRING,
+    cost_centre_code                    STRING,
+    gl_account_code                     STRING,
+    fe_person_number                    STRING,
+    fe_practice_group_key               BIGINT,
+    fe_office_key                       BIGINT,
+    fe_team_key                         BIGINT,
+    lead_partner_person_number          STRING,
+    lead_partner_practice_group_key     BIGINT,
+    lead_partner_office_key             BIGINT,
+    lead_partner_team_key               BIGINT,
+    matter_number                       STRING,
+    vendor_code                         STRING,
+    document_text                       STRING,
+    document_date                       DATE,
+    document_number                     STRING,
+    transaction_document_type_key       BIGINT,
+    posting_period                      STRING,
+    posting_date                        DATE,
+    document_currency_code              STRING,
+    actual_amount_dc                    DOUBLE,
+    office_currency_code                STRING,
+    actual_amount_oc                    DOUBLE,
+    group_currency_code                 STRING,
+    actual_amount_gc                    DOUBLE,
+    budget_amount_gc                    DOUBLE,
+    forecast_amount_gc                  DOUBLE,
+    last_updated_date_utc_at_source     TIMESTAMP,
+    
+    --metadata for reference entities
+    _ingest_date                        TIMESTAMP,
+    _source_file                        STRING,
+    _source_system                      STRING,
+    _table                              STRING,
+    _lineage_id                         STRING,
+    _effective_start_datetime           TIMESTAMP,
+    _effective_end_datetime             TIMESTAMP,
+    _current_flag                       BOOLEAN,
+    hashed_pk                           STRING
+)
+USING DELTA
+LOCATION '{location_path}/{target_table}'
+        {tbl_properties}
+""")
+
+
+df = spark.sql(f"""
 SELECT
-    CAST(NULL AS BIGINT) AS efi_key,
+    CAST(-1 AS BIGINT) AS efi_key,
     COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
-    CAST(-1 AS BIGINT) AS company_key,
+    CAST(company_code AS BIGINT) AS company_key,
     COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
     COALESCE(CAST(cost_center_code AS STRING), 'Unknown') AS cost_centre_code,
     COALESCE(CAST(gl_account_code AS STRING), 'Unknown') AS gl_account_code,
     COALESCE(CAST(fe_code AS STRING), 'Unknown') AS fe_person_number,
-    CAST(-1 AS BIGINT) AS fe_practice_group_key,
-    CAST(-1 AS BIGINT) AS fe_office_key,
-    CAST(-1 AS BIGINT) AS fe_team_key,
+    CAST(fe_practice_group_code AS BIGINT) AS fe_practice_group_key,
+    CAST(fe_office_code AS BIGINT) AS fe_office_key,
+    CAST(fe_team_code AS BIGINT) AS fe_team_key,
     COALESCE(CAST(lead_partner_code AS STRING), 'Unknown') AS lead_partner_person_number,
-    CAST(-1 AS BIGINT) AS lead_partner_practice_group_key,
-    CAST(-1 AS BIGINT) AS lead_partner_office_key,
-    CAST(-1 AS BIGINT) AS lead_partner_team_key,
+    CAST(lead_partner_practice_group_code AS BIGINT) AS lead_partner_practice_group_key,
+    CAST(lead_partner_office_code AS BIGINT) AS lead_partner_office_key,
+    CAST(lead_partner_team_code AS BIGINT) AS lead_partner_team_key,
     COALESCE(CAST(matter_code AS STRING), 'Unknown') AS matter_number,
     COALESCE(CAST(vendor_code AS STRING), 'Unknown') AS vendor_code,
     COALESCE(CAST(document_text AS STRING), 'Unknown') AS document_text,
     TO_DATE(CAST(document_date AS STRING), 'yyyyMMdd') AS document_date,
     COALESCE(CAST(document_number AS STRING), 'Unknown') AS document_number,
-    CAST(-1 AS BIGINT) AS transaction_document_type_key,
+    CAST(document_type_code AS BIGINT) AS transaction_document_type_key,
     COALESCE(CAST(posting_period AS STRING), 'Unknown') AS posting_period,
     TO_DATE(CAST(posting_date AS STRING), 'yyyyMMdd') AS posting_date,
     COALESCE(CAST(document_currency_code AS STRING), 'Unknown') AS document_currency_code,
@@ -31,14 +104,19 @@ SELECT
     CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
     CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
     CAST(lastupdatedt AS TIMESTAMP) AS last_updated_date_utc_at_source,
-    COALESCE(CAST(_source_system AS STRING), 'lh_global_external_curated') AS source_system,
-    'manual_run' AS inserted_process_instance_id,
-    'manual_run' AS updated_process_instance_id,
-    'manual_run' AS inserted_process_queue_id,
-    'manual_run' AS updated_process_queue_id,
-    current_timestamp() AS inserted_date_time,
-    current_timestamp() AS updated_date_time
-FROM {source_table}
+
+    --metadata for reference entities
+    _ingest_date,
+    _source_file,
+    _source_system
+    /*
+    _table                              STRING,
+    _lineage_id                         STRING,
+    _effective_start_datetime           TIMESTAMP,
+    _effective_end_datetime             TIMESTAMP,
+    _current_flag                       BOOLEAN,
+    hashed_pk                           STRING*/
+FROM {source_schema}.{source_table}
 """)
 
-display(efi_df.limit(10))
+display(df.limit(10))
