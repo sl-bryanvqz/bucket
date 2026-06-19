@@ -29,7 +29,8 @@ def normalize_column_name(name: str) -> str:
 for cfg in table_config:
     source_file = cfg["source_file"]
     target_table = cfg["target_table"]
-
+    full_table = f"{target_schema}.{target_table}"
+    target_path = f"{target_folder}/{target_table}"
     source_file_path = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source_lakehouse}/{source_folder}/{source_file}"
 
     # Read CSV
