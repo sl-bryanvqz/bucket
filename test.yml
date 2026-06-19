@@ -1,5 +1,3 @@
-so far i have
-
 source_workspace = "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
 source_lakehouse = "6c777342-6ab0-4f34-8ec8-4eb29b1a8ea7"
 source_folder = "Files/transactional_data"
@@ -14,6 +12,10 @@ table_config = [
     {
         "source_file" : "EFI.csv",
         "target_table" : "efi"
+    },
+    {
+        "source_file" : "TME.csv",
+        "target_table" : "tme"
     }
 ]
 import re
@@ -23,18 +25,14 @@ def normalize_column_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9]+", "_", name)
     name = re.sub(r"_+", "_", name)
     return name.strip("_").lower()
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
 for cfg in table_config:
     source_file = cfg["source_file"]
     target_table = cfg["target_table"]
 
-    source_file_path = (
-        f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source_lakehouse}/{source_folder}/{source_file}"
-    )
+    source_file_path = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source_lakehouse}/{source_folder}/{source_file}"
 
-    print(f"Processing {source_file} -> {TARGET_SCHEMA}.{target_table}")
-    print(source_file_path)
-
+    # Read CSV
     df = (
         spark.read.format("csv")
         .option("header", "true")
@@ -43,26 +41,34 @@ for cfg in table_config:
         .load(source_file_path)
     )
 
+    # Normalize column names
     df = df.toDF(*[normalize_column_name(c) for c in df.columns])
 
+    # Add metadata
     df = (
         df
         .withColumn("_ingest_time", F.current_timestamp())
         .withColumn("_source_file", F.lit(source_file))
-        .withColumn("_source_system", F.lit(SOURCE_SYSTEM))
+        .withColumn("_source_system", F.lit(source_file_path))
     )
 
-    display(df)
-   
-    (
-        df.write
-        .format("delta")
-        .mode("overwrite")
-        .option("path", target_folder)   # key line
-        .option("mergeSchema", "true")
-        .saveAsTable(f"{target_schema}.{target_table}")
-    )
+    # Create delta tables
+    if not spark.catalog.tableExists(full_table):
+        (
+            df.write
+            .format("delta")
+            .mode("overwrite")
+            .option("path", target_path)
+            .option("mergeSchema", "true")
+            .saveAsTable(full_table)
+        )
+    else:
+        (
+            df.write
+            .format("delta")
+            .mode("overwrite")
+            .option("mergeSchema", "true")
+            .save(target_path)
+        )
 
-
-
-    print(f"Loaded {source_file} into {target_schema}.{target_table}")
+    print(f"Loaded {source_file} into {full_table}")
