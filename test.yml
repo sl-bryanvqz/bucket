@@ -1,73 +1,80 @@
-SELECT CONCAT(
-    '[',
-    STRING_AGG(
-        CONCAT(
-            '{',
-                '"task_id":', CAST(task_id AS varchar(20)), ',',
-                '"task_name":', QUOTENAME(STRING_ESCAPE(task_name, 'json'), '"'), ',',
-                '"source_connection_settings":', CAST(source_connection_settings AS nvarchar(max)), ',',
-                '"source_settings":', CAST(source_settings AS nvarchar(max)), ',',
-                '"target_settings":', CAST(target_settings AS nvarchar(max)), ',',
-                '"template_settings":', CAST(template_settings AS nvarchar(max)), ',',
-                '"lineage_id":"44444444-4444-4444-aaaa-aaaaaaaaaaaa",',
-                '"task_executions_id":"55555555-5555-5555-aaaa-aaaaaaaaaaaa"',
-            '}'
-        ),
-        ','
-    ),
-    ']'
-) AS tasks_to_execute_json
-FROM meta.task_metadata
-WHERE task_id = 1;
+Cell 1
+# Source lakehouse/file
+SOURCE_WORKSPACE_ID = "<source_workspace_id>"
+SOURCE_LAKEHOUSE_ID = "<source_lakehouse_id>"
+SOURCE_FOLDER = "Files/transactional_data"
+SOURCE_FILE = "EFI.csv"
 
-SELECT
-    CONCAT(
-        '[',
-        '{',
-            '"task_id":', CAST(task_id AS varchar(20)), ',',
-            '"task_name":', QUOTENAME(STRING_ESCAPE(task_name, 'json'), '"'), ',',
-            '"source_connection_settings":', CAST(source_connection_settings AS nvarchar(max)), ',',
-            '"source_settings":', CAST(source_settings AS nvarchar(max)), ',',
-            '"target_settings":', CAST(target_settings AS nvarchar(max)), ',',
-            '"template_settings":', CAST(template_settings AS nvarchar(max)), ',',
-            '"lineage_id":"44444444-4444-4444-aaaa-aaaaaaaaaaaa",',
-            '"task_executions_id":"55555555-5555-5555-aaaa-aaaaaaaaaaaa"',
-        '}',
-        ']'
-    ) AS tasks_to_execute_json
-FROM meta.task_metadata
-WHERE task_id = 1;
+# Target in the default attached lakehouse
+TARGET_SCHEMA = "base_transactional"
+TARGET_TABLE = "efi"
 
-[
-  {
-    "task_id": 1,
-    "task_name": "Extract ADUsers",
-    "source_connection_settings": {
-      "fabric_connection_id": "f00d4cf5-3546-4d79-89c3-a9c233f2d33e"
-    },
-    "source_settings": {
-      "sql_db_id": "70dbd8b5-61de-4f80-ab87-9af560d4a919",
-      "database_name": "sql_canada_rmdrplus",
-      "schema_name": "AD",
-      "table_name": "ADUsers",
-      "is_incremental": 0,
-      "partition_option": "None",
-      "incremental_column": "ADUsersID",
-      "incremental_col_data_type": "int",
-      "primary_keys": [
-        "ADUsersID"
-      ]
-    },
-    "target_settings": {
-      "target_file_path": "sql_canada_rmdrplus/AD/ADUsers",
-      "target_file_name": "ADUsers",
-      "target_file_type": "parquet"
-    },
-    "template_settings": {
-      "template_type": "DataPipeline",
-      "template_name": "pl_extract_sql"
-    },
-    "lineage_id": "44444444-4444-4444-aaaa-aaaaaaaaaaaa",
-    "task_executions_id": "55555555-5555-5555-aaaa-aaaaaaaaaaaa"
-  }
-]
+# Minimal traceability
+SOURCE_SYSTEM = "lh_global_external_curated"
+
+# Use overwrite while testing, then switch to append later if needed
+LOAD_MODE = "overwrite"
+Cell 2
+import re
+import pyspark.sql.functions as F
+Cell 3
+source_file_path = (
+    f"abfss://{SOURCE_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/"
+    f"{SOURCE_LAKEHOUSE_ID}/{SOURCE_FOLDER}/{SOURCE_FILE}"
+)
+
+print(source_file_path)
+Cell 4
+df = (
+    spark.read.format("csv")
+    .option("header", "true")
+    .option("inferSchema", "true")
+    .option("delimiter", ",")
+    .load(source_file_path)
+)
+
+print("Rows:", df.count())
+display(df.limit(20))
+print(df.columns)
+Cell 5
+def normalize_column_name(name: str) -> str:
+    name = name.strip()
+    name = re.sub(r"[^A-Za-z0-9]+", "_", name)
+    name = re.sub(r"_+", "_", name)
+    return name.strip("_").lower()
+
+df = df.toDF(*[normalize_column_name(c) for c in df.columns])
+
+print(df.columns)
+display(df.limit(10))
+Cell 6
+df = (
+    df
+    .withColumn("_ingest_time", F.current_timestamp())
+    .withColumn("_source_file", F.lit(SOURCE_FILE))
+    .withColumn("_source_system", F.lit(SOURCE_SYSTEM))
+)
+
+display(df.limit(10))
+Cell 7
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET_SCHEMA}")
+print(f"Schema ready: {TARGET_SCHEMA}")
+Cell 8
+target_table_fqn = f"{TARGET_SCHEMA}.{TARGET_TABLE}"
+
+(
+    df.write
+    .format("delta")
+    .mode(LOAD_MODE)
+    .option("mergeSchema", "true")
+    .saveAsTable(target_table_fqn)
+)
+
+print(f"Loaded {SOURCE_FILE} into {target_table_fqn}")
+Cell 9
+result_df = spark.table(target_table_fqn)
+
+print("Target rows:", result_df.count())
+display(result_df.limit(20))
+print(result_df.columns)
+Later reuse
