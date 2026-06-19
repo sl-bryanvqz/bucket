@@ -1,83 +1,299 @@
-source_workspace = "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
-source_lakehouse = "6c777342-6ab0-4f34-8ec8-4eb29b1a8ea7"
-source_folder = "Files/transactional_data"
+source_schema = "base_transactional"
+source_table = "efi"
+
+target_schema = "curated_transactional"
+target_table = "efi"
+
+source_system_default = "lh_global_external_curated"
+
+full_source_table = f"{source_schema}.{source_table}"
+full_target_table = f"{target_schema}.{target_table}"
+
+spark.sql(f"""
+CREATE SCHEMA IF NOT EXISTS {target_schema}
+""")
 
 
-target_workspace = "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
-target_lakehouse = "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a"
-target_schema = "base_transactional"
-target_folder = "Files/base/transactional"
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {full_target_table} (
+    efi_key BIGINT,
+    unit STRING,
+    company_key BIGINT,
+    member_firm_code STRING,
+    cost_centre_code STRING,
+    gl_account_code STRING,
+    fe_person_number STRING,
+    fe_practice_group_key BIGINT,
+    fe_office_key BIGINT,
+    fe_team_key BIGINT,
+    lead_partner_person_number STRING,
+    lead_partner_practice_group_key BIGINT,
+    lead_partner_office_key BIGINT,
+    lead_partner_team_key BIGINT,
+    matter_number STRING,
+    vendor_code STRING,
+    document_text STRING,
+    document_date DATE,
+    document_number STRING,
+    transaction_document_type_key BIGINT,
+    posting_period STRING,
+    posting_date DATE,
+    document_currency_code STRING,
+    actual_amount_dc DOUBLE,
+    office_currency_code STRING,
+    actual_amount_oc DOUBLE,
+    group_currency_code STRING,
+    actual_amount_gc DOUBLE,
+    budget_amount_gc DOUBLE,
+    forecast_amount_gc DOUBLE,
+    last_updated_date_utc_at_source TIMESTAMP,
+    source_system STRING,
+    inserted_process_instance_id STRING,
+    updated_process_instance_id STRING,
+    inserted_process_queue_id STRING,
+    updated_process_queue_id STRING,
+    inserted_date_time TIMESTAMP,
+    updated_date_time TIMESTAMP
+)
+USING DELTA
+""")
 
-table_config = [
-    {
-        "source_file" : "EFI.csv",
-        "target_table" : "efi"
-    },
-    {
-        "source_file" : "TME.csv",
-        "target_table" : "tme"
-    },
-    {
-        "source_file" : "ChronoMetrics.csv",
-        "target_table" : "chrono_metrics"
-    }
-]
+spark.sql(f"""
+MERGE INTO {full_target_table} AS t
+USING (
+    SELECT
+        CAST(
+            CASE
+                WHEN q.existing_efi_key IS NOT NULL THEN q.existing_efi_key
+                ELSE q.rn + q.max_efi_key
+            END AS BIGINT
+        ) AS efi_key,
+        q.unit,
+        q.company_key,
+        q.member_firm_code,
+        q.cost_centre_code,
+        q.gl_account_code,
+        q.fe_person_number,
+        q.fe_practice_group_key,
+        q.fe_office_key,
+        q.fe_team_key,
+        q.lead_partner_person_number,
+        q.lead_partner_practice_group_key,
+        q.lead_partner_office_key,
+        q.lead_partner_team_key,
+        q.matter_number,
+        q.vendor_code,
+        q.document_text,
+        q.document_date,
+        q.document_number,
+        q.transaction_document_type_key,
+        q.posting_period,
+        q.posting_date,
+        q.document_currency_code,
+        q.actual_amount_dc,
+        q.office_currency_code,
+        q.actual_amount_oc,
+        q.group_currency_code,
+        q.actual_amount_gc,
+        q.budget_amount_gc,
+        q.forecast_amount_gc,
+        q.last_updated_date_utc_at_source,
+        q.source_system,
+        COALESCE(q.existing_inserted_process_instance_id, q.run_instance_id) AS inserted_process_instance_id,
+        q.run_instance_id AS updated_process_instance_id,
+        COALESCE(q.existing_inserted_process_queue_id, q.run_queue_id) AS inserted_process_queue_id,
+        q.run_queue_id AS updated_process_queue_id,
+        COALESCE(q.existing_inserted_date_time, q.run_ts) AS inserted_date_time,
+        q.run_ts AS updated_date_time
+    FROM (
+        SELECT
+            s.*,
+            k.max_efi_key,
+            e.efi_key AS existing_efi_key,
+            e.inserted_process_instance_id AS existing_inserted_process_instance_id,
+            e.inserted_process_queue_id AS existing_inserted_process_queue_id,
+            e.inserted_date_time AS existing_inserted_date_time,
+            m.run_instance_id,
+            m.run_queue_id,
+            m.run_ts,
+            ROW_NUMBER() OVER (
+                ORDER BY
+                    s.document_number,
+                    s.posting_period,
+                    s.gl_account_code,
+                    s.unit,
+                    s.member_firm_code
+            ) AS rn
+        FROM (
+            SELECT
+                COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
+                CAST(-1 AS BIGINT) AS company_key,
+                COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
+                COALESCE(CAST(cost_center_code AS STRING), 'Unknown') AS cost_centre_code,
+                COALESCE(CAST(gl_account_code AS STRING), 'Unknown') AS gl_account_code,
+                COALESCE(CAST(fe_code AS STRING), 'Unknown') AS fe_person_number,
+                CAST(-1 AS BIGINT) AS fe_practice_group_key,
+                CAST(-1 AS BIGINT) AS fe_office_key,
+                CAST(-1 AS BIGINT) AS fe_team_key,
+                COALESCE(CAST(lead_partner_code AS STRING), 'Unknown') AS lead_partner_person_number,
+                CAST(-1 AS BIGINT) AS lead_partner_practice_group_key,
+                CAST(-1 AS BIGINT) AS lead_partner_office_key,
+                CAST(-1 AS BIGINT) AS lead_partner_team_key,
+                COALESCE(CAST(matter_code AS STRING), 'Unknown') AS matter_number,
+                COALESCE(CAST(vendor_code AS STRING), 'Unknown') AS vendor_code,
+                COALESCE(CAST(document_text AS STRING), 'Unknown') AS document_text,
+                TO_DATE(CAST(document_date AS STRING), 'yyyyMMdd') AS document_date,
+                COALESCE(CAST(document_number AS STRING), 'Unknown') AS document_number,
+                CAST(-1 AS BIGINT) AS transaction_document_type_key,
+                COALESCE(CAST(posting_period AS STRING), 'Unknown') AS posting_period,
+                TO_DATE(CAST(posting_date AS STRING), 'yyyyMMdd') AS posting_date,
+                COALESCE(CAST(document_currency_code AS STRING), 'Unknown') AS document_currency_code,
+                CAST(actual_amount_dc AS DOUBLE) AS actual_amount_dc,
+                COALESCE(CAST(office_currency_code AS STRING), 'Unknown') AS office_currency_code,
+                CAST(actual_amount_oc AS DOUBLE) AS actual_amount_oc,
+                COALESCE(CAST(group_currency_code AS STRING), 'Unknown') AS group_currency_code,
+                CAST(actual_amount_gc AS DOUBLE) AS actual_amount_gc,
+                CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
+                CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
+                CAST(lastupdatedt AS TIMESTAMP) AS last_updated_date_utc_at_source,
+                COALESCE(CAST(_source_system AS STRING), '{source_system_default}') AS source_system
+            FROM {full_source_table}
+        ) s
+        CROSS JOIN (
+            SELECT COALESCE(MAX(efi_key), 0) AS max_efi_key
+            FROM {full_target_table}
+        ) k
+        CROSS JOIN (
+            SELECT
+                uuid() AS run_instance_id,
+                uuid() AS run_queue_id,
+                current_timestamp() AS run_ts
+        ) m
+        LEFT JOIN {full_target_table} e
+          ON e.document_number <=> s.document_number
+         AND e.posting_period <=> s.posting_period
+         AND e.gl_account_code <=> s.gl_account_code
+         AND e.unit <=> s.unit
+         AND e.member_firm_code <=> s.member_firm_code
+    ) q
+) AS s
+ON  t.document_number <=> s.document_number
+AND t.posting_period <=> s.posting_period
+AND t.gl_account_code <=> s.gl_account_code
+AND t.unit <=> s.unit
+AND t.member_firm_code <=> s.member_firm_code
 
-import re
-import pyspark.sql.functions as F
+WHEN MATCHED THEN UPDATE SET
+    t.unit = s.unit,
+    t.company_key = s.company_key,
+    t.member_firm_code = s.member_firm_code,
+    t.cost_centre_code = s.cost_centre_code,
+    t.gl_account_code = s.gl_account_code,
+    t.fe_person_number = s.fe_person_number,
+    t.fe_practice_group_key = s.fe_practice_group_key,
+    t.fe_office_key = s.fe_office_key,
+    t.fe_team_key = s.fe_team_key,
+    t.lead_partner_person_number = s.lead_partner_person_number,
+    t.lead_partner_practice_group_key = s.lead_partner_practice_group_key,
+    t.lead_partner_office_key = s.lead_partner_office_key,
+    t.lead_partner_team_key = s.lead_partner_team_key,
+    t.matter_number = s.matter_number,
+    t.vendor_code = s.vendor_code,
+    t.document_text = s.document_text,
+    t.document_date = s.document_date,
+    t.transaction_document_type_key = s.transaction_document_type_key,
+    t.posting_date = s.posting_date,
+    t.document_currency_code = s.document_currency_code,
+    t.actual_amount_dc = s.actual_amount_dc,
+    t.office_currency_code = s.office_currency_code,
+    t.actual_amount_oc = s.actual_amount_oc,
+    t.group_currency_code = s.group_currency_code,
+    t.actual_amount_gc = s.actual_amount_gc,
+    t.budget_amount_gc = s.budget_amount_gc,
+    t.forecast_amount_gc = s.forecast_amount_gc,
+    t.last_updated_date_utc_at_source = s.last_updated_date_utc_at_source,
+    t.source_system = s.source_system,
+    t.updated_process_instance_id = s.updated_process_instance_id,
+    t.updated_process_queue_id = s.updated_process_queue_id,
+    t.updated_date_time = s.updated_date_time
 
-def normalize_column_name(name: str) -> str:
-    name = name.strip()
-    name = re.sub(r"[^A-Za-z0-9]+", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_").lower()
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
-
-for cfg in table_config:
-    source_file = cfg["source_file"]
-    target_table = cfg["target_table"]
-    full_table = f"{target_schema}.{target_table}"
-    target_path = f"{target_folder}/{target_table}"
-    source_file_path = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source_lakehouse}/{source_folder}/{source_file}"
-
-    # Read CSV
-    df = (
-        spark.read.format("csv")
-        .option("header", "true")
-        .option("inferSchema", "true")
-        .option("delimiter", ",")
-        .load(source_file_path)
-    )
-
-    # Normalize column names
-    df = df.toDF(*[normalize_column_name(c) for c in df.columns])
-
-    # Add metadata
-    df = (
-        df
-        .withColumn("_ingest_time", F.current_timestamp())
-        .withColumn("_source_file", F.lit(source_file))
-        .withColumn("_source_system", F.lit(source_file_path))
-    )
-
-    # Create delta tables
-    if not spark.catalog.tableExists(full_table):
-        (
-            df.write
-            .format("delta")
-            .mode("overwrite")
-            .option("path", target_path)
-            .option("mergeSchema", "true")
-            .saveAsTable(full_table)
-        )
-    else:
-        (
-            df.write
-            .format("delta")
-            .mode("overwrite")
-            .option("mergeSchema", "true")
-            .save(target_path)
-        )
-
-    print(f"Loaded {source_file} into {full_table}")
+WHEN NOT MATCHED THEN INSERT (
+    efi_key,
+    unit,
+    company_key,
+    member_firm_code,
+    cost_centre_code,
+    gl_account_code,
+    fe_person_number,
+    fe_practice_group_key,
+    fe_office_key,
+    fe_team_key,
+    lead_partner_person_number,
+    lead_partner_practice_group_key,
+    lead_partner_office_key,
+    lead_partner_team_key,
+    matter_number,
+    vendor_code,
+    document_text,
+    document_date,
+    document_number,
+    transaction_document_type_key,
+    posting_period,
+    posting_date,
+    document_currency_code,
+    actual_amount_dc,
+    office_currency_code,
+    actual_amount_oc,
+    group_currency_code,
+    actual_amount_gc,
+    budget_amount_gc,
+    forecast_amount_gc,
+    last_updated_date_utc_at_source,
+    source_system,
+    inserted_process_instance_id,
+    updated_process_instance_id,
+    inserted_process_queue_id,
+    updated_process_queue_id,
+    inserted_date_time,
+    updated_date_time
+) VALUES (
+    s.efi_key,
+    s.unit,
+    s.company_key,
+    s.member_firm_code,
+    s.cost_centre_code,
+    s.gl_account_code,
+    s.fe_person_number,
+    s.fe_practice_group_key,
+    s.fe_office_key,
+    s.fe_team_key,
+    s.lead_partner_person_number,
+    s.lead_partner_practice_group_key,
+    s.lead_partner_office_key,
+    s.lead_partner_team_key,
+    s.matter_number,
+    s.vendor_code,
+    s.document_text,
+    s.document_date,
+    s.document_number,
+    s.transaction_document_type_key,
+    s.posting_period,
+    s.posting_date,
+    s.document_currency_code,
+    s.actual_amount_dc,
+    s.office_currency_code,
+    s.actual_amount_oc,
+    s.group_currency_code,
+    s.actual_amount_gc,
+    s.budget_amount_gc,
+    s.forecast_amount_gc,
+    s.last_updated_date_utc_at_source,
+    s.source_system,
+    s.inserted_process_instance_id,
+    s.updated_process_instance_id,
+    s.inserted_process_queue_id,
+    s.updated_process_queue_id,
+    s.inserted_date_time,
+    s.updated_date_time
+)
+""")
