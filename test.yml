@@ -1,15 +1,4 @@
-import re
-import pyspark.sql.functions as F
-
-source_schema = "base_transactional"
-source_table = "efi"
-
-target_schema = "curated_transactional"
-target_table = "efi"
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
-
-location_path = f"Files/{target_schema}/{target_table}"
+location_path = f"Tables/{target_schema}/{target_table}"
 
 tbl_properties = """
 TBLPROPERTIES (
@@ -53,9 +42,8 @@ CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
     budget_amount_gc                    DOUBLE,
     forecast_amount_gc                  DOUBLE,
     last_updated_date_utc_at_source     TIMESTAMP,
-    
-    --metadata for reference entities
-    _ingest_date                        TIMESTAMP,
+
+    _ingest_date                        DATE,
     _source_file                        STRING,
     _source_system                      STRING,
     _table                              STRING,
@@ -66,14 +54,14 @@ CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
     hashed_pk                           STRING
 )
 USING DELTA
-LOCATION '{location_path}/{target_table}'
-        {tbl_properties}
+LOCATION '{location_path}'
+{tbl_properties}
 """)
 
 
 df = spark.sql(f"""
 SELECT
-    CAST(-1 AS BIGINT) AS efi_key,
+    CAST(NULL AS BIGINT) AS efi_key,
     COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
     CAST(company_code AS BIGINT) AS company_key,
     COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
@@ -103,20 +91,47 @@ SELECT
     CAST(actual_amount_gc AS DOUBLE) AS actual_amount_gc,
     CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
     CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
-    CAST(lastupdatedt AS TIMESTAMP) AS last_updated_date_utc_at_source,
+    TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
 
-    --metadata for reference entities
-    _ingest_date,
-    _source_file,
-    _source_system
-    /*
-    _table                              STRING,
-    _lineage_id                         STRING,
-    _effective_start_datetime           TIMESTAMP,
-    _effective_end_datetime             TIMESTAMP,
-    _current_flag                       BOOLEAN,
-    hashed_pk                           STRING*/
+    CAST(_ingest_date AS DATE) AS _ingest_date,
+    CAST(_source_file AS STRING) AS _source_file,
+    COALESCE(CAST(_source_system AS STRING), 'lh_global_external_curated') AS _source_system,
+    'efi' AS _table,
+    CAST(_lineage_id AS STRING) AS _lineage_id,
+    CAST(_effective_start_datetime AS TIMESTAMP) AS _effective_start_datetime,
+    CAST(_effective_end_datetime AS TIMESTAMP) AS _effective_end_datetime,
+    CAST(_current_flag AS BOOLEAN) AS _current_flag,
+    hashed_pk
 FROM {source_schema}.{source_table}
 """)
 
 display(df.limit(10))
+
+
+from delta.tables import DeltaTable
+
+if not DeltaTable.isDeltaTable(spark, location_path):
+    (
+        df.write
+        .format("delta")
+        .mode("overwrite")
+        .option("path", location_path)
+        .option("overwriteSchema", "true")
+        .saveAsTable(f"{target_schema}.{target_table}")
+    )
+    print(f"Created {target_schema}.{target_table}")
+else:
+    delta_table = DeltaTable.forPath(spark, location_path)
+
+    (
+        delta_table.alias("t")
+        .merge(
+            df.alias("s"),
+            "t.hashed_pk = s.hashed_pk"
+        )
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+
+    print(f"Merged into {target_schema}.{target_table}")
