@@ -1,10 +1,35 @@
-for cfg in TABLE_CONFIGS:
+so far i have
+
+source_workspace = "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
+source_lakehouse = "6c777342-6ab0-4f34-8ec8-4eb29b1a8ea7"
+source_folder = "Files/transactional_data"
+
+
+target_workspace = "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
+target_lakehouse = "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a"
+target_schema = "base_transactional"
+target_folder = "Files/base/transactional"
+
+table_config = [
+    {
+        "source_file" : "EFI.csv",
+        "target_table" : "efi"
+    }
+]
+import re
+import pyspark.sql.functions as F
+def normalize_column_name(name: str) -> str:
+    name = name.strip()
+    name = re.sub(r"[^A-Za-z0-9]+", "_", name)
+    name = re.sub(r"_+", "_", name)
+    return name.strip("_").lower()
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+for cfg in table_config:
     source_file = cfg["source_file"]
     target_table = cfg["target_table"]
 
     source_file_path = (
-        f"abfss://{SOURCE_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/"
-        f"{SOURCE_LAKEHOUSE_ID}/{SOURCE_FOLDER}/{source_file}"
+        f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source_lakehouse}/{source_folder}/{source_file}"
     )
 
     print(f"Processing {source_file} -> {TARGET_SCHEMA}.{target_table}")
@@ -27,21 +52,17 @@ for cfg in TABLE_CONFIGS:
         .withColumn("_source_system", F.lit(SOURCE_SYSTEM))
     )
 
+    display(df)
+   
     (
         df.write
         .format("delta")
-        .mode(LOAD_MODE)
+        .mode("overwrite")
+        .option("path", target_folder)   # key line
         .option("mergeSchema", "true")
-        .saveAsTable(f"{TARGET_SCHEMA}.{target_table}")
+        .saveAsTable(f"{target_schema}.{target_table}")
     )
 
-    print(f"Loaded {source_file} into {TARGET_SCHEMA}.{target_table}")
-Cell 6
-for cfg in TABLE_CONFIGS:
-    target_table = cfg["target_table"]
-    target_table_fqn = f"{TARGET_SCHEMA}.{target_table}"
 
-    result_df = spark.table(target_table_fqn)
 
-    print(f"{target_table_fqn}: {result_df.count()} rows")
-    display(result_df.limit(5))
+    print(f"Loaded {source_file} into {target_schema}.{target_table}")
