@@ -1,80 +1,47 @@
-Cell 1
-# Source lakehouse/file
-SOURCE_WORKSPACE_ID = "<source_workspace_id>"
-SOURCE_LAKEHOUSE_ID = "<source_lakehouse_id>"
-SOURCE_FOLDER = "Files/transactional_data"
-SOURCE_FILE = "EFI.csv"
+for cfg in TABLE_CONFIGS:
+    source_file = cfg["source_file"]
+    target_table = cfg["target_table"]
 
-# Target in the default attached lakehouse
-TARGET_SCHEMA = "base_transactional"
-TARGET_TABLE = "efi"
+    source_file_path = (
+        f"abfss://{SOURCE_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/"
+        f"{SOURCE_LAKEHOUSE_ID}/{SOURCE_FOLDER}/{source_file}"
+    )
 
-# Minimal traceability
-SOURCE_SYSTEM = "lh_global_external_curated"
+    print(f"Processing {source_file} -> {TARGET_SCHEMA}.{target_table}")
+    print(source_file_path)
 
-# Use overwrite while testing, then switch to append later if needed
-LOAD_MODE = "overwrite"
-Cell 2
-import re
-import pyspark.sql.functions as F
-Cell 3
-source_file_path = (
-    f"abfss://{SOURCE_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/"
-    f"{SOURCE_LAKEHOUSE_ID}/{SOURCE_FOLDER}/{SOURCE_FILE}"
-)
+    df = (
+        spark.read.format("csv")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .option("delimiter", ",")
+        .load(source_file_path)
+    )
 
-print(source_file_path)
-Cell 4
-df = (
-    spark.read.format("csv")
-    .option("header", "true")
-    .option("inferSchema", "true")
-    .option("delimiter", ",")
-    .load(source_file_path)
-)
+    df = df.toDF(*[normalize_column_name(c) for c in df.columns])
 
-print("Rows:", df.count())
-display(df.limit(20))
-print(df.columns)
-Cell 5
-def normalize_column_name(name: str) -> str:
-    name = name.strip()
-    name = re.sub(r"[^A-Za-z0-9]+", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_").lower()
+    df = (
+        df
+        .withColumn("_ingest_time", F.current_timestamp())
+        .withColumn("_source_file", F.lit(source_file))
+        .withColumn("_source_system", F.lit(SOURCE_SYSTEM))
+    )
 
-df = df.toDF(*[normalize_column_name(c) for c in df.columns])
+    (
+        df.write
+        .format("delta")
+        .mode(LOAD_MODE)
+        .option("mergeSchema", "true")
+        .saveAsTable(f"{TARGET_SCHEMA}.{target_table}")
+    )
 
-print(df.columns)
-display(df.limit(10))
+    print(f"Loaded {source_file} into {TARGET_SCHEMA}.{target_table}")
 Cell 6
-df = (
-    df
-    .withColumn("_ingest_time", F.current_timestamp())
-    .withColumn("_source_file", F.lit(SOURCE_FILE))
-    .withColumn("_source_system", F.lit(SOURCE_SYSTEM))
-)
+for cfg in TABLE_CONFIGS:
+    target_table = cfg["target_table"]
+    target_table_fqn = f"{TARGET_SCHEMA}.{target_table}"
 
-display(df.limit(10))
-Cell 7
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET_SCHEMA}")
-print(f"Schema ready: {TARGET_SCHEMA}")
-Cell 8
-target_table_fqn = f"{TARGET_SCHEMA}.{TARGET_TABLE}"
+    result_df = spark.table(target_table_fqn)
 
-(
-    df.write
-    .format("delta")
-    .mode(LOAD_MODE)
-    .option("mergeSchema", "true")
-    .saveAsTable(target_table_fqn)
-)
-
-print(f"Loaded {SOURCE_FILE} into {target_table_fqn}")
-Cell 9
-result_df = spark.table(target_table_fqn)
-
-print("Target rows:", result_df.count())
-display(result_df.limit(20))
-print(result_df.columns)
-Later reuse
+    print(f"{target_table_fqn}: {result_df.count()} rows")
+    display(result_df.limit(5))
