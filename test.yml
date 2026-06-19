@@ -16,16 +16,24 @@ table_config = [
     {
         "source_file" : "TME.csv",
         "target_table" : "tme"
+    },
+    {
+        "source_file" : "ChronoMetrics.csv",
+        "target_table" : "chrono_metrics"
     }
 ]
+
 import re
 import pyspark.sql.functions as F
+
 def normalize_column_name(name: str) -> str:
     name = name.strip()
     name = re.sub(r"[^A-Za-z0-9]+", "_", name)
     name = re.sub(r"_+", "_", name)
     return name.strip("_").lower()
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
 for cfg in table_config:
     source_file = cfg["source_file"]
     target_table = cfg["target_table"]
