@@ -1,137 +1,22 @@
-location_path = f"Tables/{target_schema}/{target_table}"
+from pyspark.sql.functions import count
 
-tbl_properties = """
-TBLPROPERTIES (
-    'delta.autoOptimize.optimizeWrite'     = 'true',
-    'delta.autoOptimize.autoCompact'       = 'true',
-    'delta.logRetentionDuration'           = 'interval 30 days',
-    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
+# 1. Find duplicate hashed_pk values
+dup_keys_df = (
+    df.groupBy("hashed_pk")
+      .agg(count("*").alias("duplicate_count"))
+      .filter("duplicate_count > 1")
 )
-"""
 
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
-    efi_key                             BIGINT,
-    unit                                STRING,
-    company_key                         BIGINT,
-    member_firm_code                    STRING,
-    cost_centre_code                    STRING,
-    gl_account_code                     STRING,
-    fe_person_number                    STRING,
-    fe_practice_group_key               BIGINT,
-    fe_office_key                       BIGINT,
-    fe_team_key                         BIGINT,
-    lead_partner_person_number          STRING,
-    lead_partner_practice_group_key     BIGINT,
-    lead_partner_office_key             BIGINT,
-    lead_partner_team_key               BIGINT,
-    matter_number                       STRING,
-    vendor_code                         STRING,
-    document_text                       STRING,
-    document_date                       DATE,
-    document_number                     STRING,
-    transaction_document_type_key       BIGINT,
-    posting_period                      STRING,
-    posting_date                        DATE,
-    document_currency_code              STRING,
-    actual_amount_dc                    DOUBLE,
-    office_currency_code                STRING,
-    actual_amount_oc                    DOUBLE,
-    group_currency_code                 STRING,
-    actual_amount_gc                    DOUBLE,
-    budget_amount_gc                    DOUBLE,
-    forecast_amount_gc                  DOUBLE,
-    last_updated_date_utc_at_source     TIMESTAMP,
+print("Duplicate hashed_pk values:")
+dup_keys_df.show(50, truncate=False)
 
-    _ingest_date                        DATE,
-    _source_file                        STRING,
-    _source_system                      STRING,
-    _table                              STRING,
-    _lineage_id                         STRING,
-    _effective_start_datetime           TIMESTAMP,
-    _effective_end_datetime             TIMESTAMP,
-    _current_flag                       BOOLEAN,
-    hashed_pk                           STRING
+print(f"Total duplicate keys: {dup_keys_df.count()}")
+
+# 2. Bring back the actual duplicate records
+dup_records_df = (
+    df.join(dup_keys_df.select("hashed_pk"), on="hashed_pk", how="inner")
+      .orderBy("hashed_pk")
 )
-USING DELTA
-LOCATION '{location_path}'
-{tbl_properties}
-""")
 
-
-df = spark.sql(f"""
-SELECT
-    CAST(NULL AS BIGINT) AS efi_key,
-    COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
-    CAST(company_code AS BIGINT) AS company_key,
-    COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
-    COALESCE(CAST(cost_center_code AS STRING), 'Unknown') AS cost_centre_code,
-    COALESCE(CAST(gl_account_code AS STRING), 'Unknown') AS gl_account_code,
-    COALESCE(CAST(fe_code AS STRING), 'Unknown') AS fe_person_number,
-    CAST(fe_practice_group_code AS BIGINT) AS fe_practice_group_key,
-    CAST(fe_office_code AS BIGINT) AS fe_office_key,
-    CAST(fe_team_code AS BIGINT) AS fe_team_key,
-    COALESCE(CAST(lead_partner_code AS STRING), 'Unknown') AS lead_partner_person_number,
-    CAST(lead_partner_practice_group_code AS BIGINT) AS lead_partner_practice_group_key,
-    CAST(lead_partner_office_code AS BIGINT) AS lead_partner_office_key,
-    CAST(lead_partner_team_code AS BIGINT) AS lead_partner_team_key,
-    COALESCE(CAST(matter_code AS STRING), 'Unknown') AS matter_number,
-    COALESCE(CAST(vendor_code AS STRING), 'Unknown') AS vendor_code,
-    COALESCE(CAST(document_text AS STRING), 'Unknown') AS document_text,
-    TO_DATE(CAST(document_date AS STRING), 'yyyyMMdd') AS document_date,
-    COALESCE(CAST(document_number AS STRING), 'Unknown') AS document_number,
-    CAST(document_type_code AS BIGINT) AS transaction_document_type_key,
-    COALESCE(CAST(posting_period AS STRING), 'Unknown') AS posting_period,
-    TO_DATE(CAST(posting_date AS STRING), 'yyyyMMdd') AS posting_date,
-    COALESCE(CAST(document_currency_code AS STRING), 'Unknown') AS document_currency_code,
-    CAST(actual_amount_dc AS DOUBLE) AS actual_amount_dc,
-    COALESCE(CAST(office_currency_code AS STRING), 'Unknown') AS office_currency_code,
-    CAST(actual_amount_oc AS DOUBLE) AS actual_amount_oc,
-    COALESCE(CAST(group_currency_code AS STRING), 'Unknown') AS group_currency_code,
-    CAST(actual_amount_gc AS DOUBLE) AS actual_amount_gc,
-    CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
-    CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
-    TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
-
-    CAST(_ingest_date AS DATE) AS _ingest_date,
-    CAST(_source_file AS STRING) AS _source_file,
-    COALESCE(CAST(_source_system AS STRING), 'lh_global_external_curated') AS _source_system,
-    'efi' AS _table,
-    CAST(_lineage_id AS STRING) AS _lineage_id,
-    CAST(_effective_start_datetime AS TIMESTAMP) AS _effective_start_datetime,
-    CAST(_effective_end_datetime AS TIMESTAMP) AS _effective_end_datetime,
-    CAST(_current_flag AS BOOLEAN) AS _current_flag,
-    hashed_pk
-FROM {source_schema}.{source_table}
-""")
-
-display(df.limit(10))
-
-
-from delta.tables import DeltaTable
-
-if not DeltaTable.isDeltaTable(spark, location_path):
-    (
-        df.write
-        .format("delta")
-        .mode("overwrite")
-        .option("path", location_path)
-        .option("overwriteSchema", "true")
-        .saveAsTable(f"{target_schema}.{target_table}")
-    )
-    print(f"Created {target_schema}.{target_table}")
-else:
-    delta_table = DeltaTable.forPath(spark, location_path)
-
-    (
-        delta_table.alias("t")
-        .merge(
-            df.alias("s"),
-            "t.hashed_pk = s.hashed_pk"
-        )
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
-    )
-
-    print(f"Merged into {target_schema}.{target_table}")
+print("Sample duplicate records:")
+display(dup_records_df.limit(10))
