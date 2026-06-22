@@ -1,66 +1,131 @@
+def clean_string(col_name: str) -> str:
+    return f"""
+    CASE
+        WHEN {col_name} IS NULL THEN 'Unknown'
+        WHEN TRIM(CAST({col_name} AS STRING)) IN ('', '#') THEN 'Unknown'
+        ELSE TRIM(CAST({col_name} AS STRING))
+    END
+    """
+
+
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
+    efi_key                             BIGINT,
+    unit                                STRING,
+    company_key                         STRING,
+    member_firm_code                    STRING,
+    profit_center_code                  STRING,
+    cost_center_code                    STRING,
+    gl_account_code                     STRING,
+    fe_person_number                    STRING,
+    fe_practice_group_key               STRING,
+    fe_office_key                       STRING,
+    fe_team_key                         STRING,
+    lead_partner_person_number          STRING,
+    lead_partner_practice_group_key     STRING,
+    lead_partner_office_key             STRING,
+    lead_partner_team_key               STRING,
+    matter_number                       STRING,
+    vendor_code                         STRING,
+    document_text                       STRING,
+    document_date                       DATE,
+    document_number                     STRING,
+    transaction_document_type_key       STRING,
+    posting_period                      STRING,
+    posting_date                        DATE,
+    document_currency_code              STRING,
+    actual_amount_dc                    DOUBLE,
+    office_currency_code                STRING,
+    actual_amount_oc                    DOUBLE,
+    group_currency_code                 STRING,
+    actual_amount_gc                    DOUBLE,
+    budget_amount_gc                    DOUBLE,
+    forecast_amount_gc                  DOUBLE,
+    last_updated_date_utc_at_source     TIMESTAMP,
+
+    _ingest_date                        DATE,
+    _source_file                        STRING,
+    _source_system                      STRING,
+    _table                              STRING,
+    _lineage_id                         STRING,
+    _effective_start_datetime           TIMESTAMP,
+    _effective_end_datetime             TIMESTAMP,
+    _current_flag                       BOOLEAN,
+    hashed_pk                           STRING
+)
+USING DELTA
+LOCATION '{location_path}'
+{tbl_properties}
+""")
+
+
 df = spark.sql(f"""
 SELECT DISTINCT
-    CAST(-1 AS BIGINT) AS efi_key,
-    COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
-    CAST(company_code AS STRING) AS company_key,
-    COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
-    COALESCE(CAST(profit_center_code AS STRING), 'Unknown') AS profit_center_code,
-    COALESCE(CAST(cost_center_code AS STRING), 'Unknown') AS cost_center_code,
-    COALESCE(CAST(gl_account_code AS STRING), 'Unknown') AS gl_account_code,
-    COALESCE(CAST(fe_code AS STRING), 'Unknown') AS fe_person_number,
-    CAST(fe_practice_group_code AS STRING) AS fe_practice_group_key,
-    CAST(fe_office_code AS STRING) AS fe_office_key,
-    CAST(fe_team_code AS STRING) AS fe_team_key,
-    COALESCE(CAST(lead_partner_code AS STRING), 'Unknown') AS lead_partner_person_number,
-    CAST(lead_partner_practice_group_code AS STRING) AS lead_partner_practice_group_key,
-    CAST(lead_partner_office_code AS STRING) AS lead_partner_office_key,
-    CAST(lead_partner_team_code AS STRING) AS lead_partner_team_key,
-    COALESCE(CAST(matter_code AS STRING), 'Unknown') AS matter_number,
-    COALESCE(CAST(vendor_code AS STRING), 'Unknown') AS vendor_code,
-    COALESCE(CAST(document_text AS STRING), 'Unknown') AS document_text,
+    CAST(NULL AS BIGINT) AS efi_key,
+    {clean_string("unit")} AS unit,
+    {clean_string("company_code")} AS company_key,
+    {clean_string("company_region_src")} AS member_firm_code,
+    {clean_string("profit_center_code")} AS profit_center_code,
+    {clean_string("cost_center_code")} AS cost_center_code,
+    {clean_string("gl_account_code")} AS gl_account_code,
+    {clean_string("fe_code")} AS fe_person_number,
+    {clean_string("fe_practice_group_code")} AS fe_practice_group_key,
+    {clean_string("fe_office_code")} AS fe_office_key,
+    {clean_string("fe_team_code")} AS fe_team_key,
+    {clean_string("lead_partner_code")} AS lead_partner_person_number,
+    {clean_string("lead_partner_practice_group_code")} AS lead_partner_practice_group_key,
+    {clean_string("lead_partner_office_code")} AS lead_partner_office_key,
+    {clean_string("lead_partner_team_code")} AS lead_partner_team_key,
+    {clean_string("matter_code")} AS matter_number,
+    {clean_string("vendor_code")} AS vendor_code,
+    {clean_string("document_text")} AS document_text,
     TO_DATE(CAST(document_date AS STRING), 'yyyyMMdd') AS document_date,
-    COALESCE(CAST(document_number AS STRING), 'Unknown') AS document_number,
-    CAST(document_type_code AS STRING) AS transaction_document_type_key,
-    COALESCE(CAST(posting_period AS STRING), 'Unknown') AS posting_period,
+    {clean_string("document_number")} AS document_number,
+    {clean_string("document_type_code")} AS transaction_document_type_key,
+    {clean_string("posting_period")} AS posting_period,
     TO_DATE(CAST(posting_date AS STRING), 'yyyyMMdd') AS posting_date,
-    COALESCE(CAST(document_currency_code AS STRING), 'Unknown') AS document_currency_code,
+    {clean_string("document_currency_code")} AS document_currency_code,
     CAST(actual_amount_dc AS DOUBLE) AS actual_amount_dc,
-    COALESCE(CAST(office_currency_code AS STRING), 'Unknown') AS office_currency_code,
+    {clean_string("office_currency_code")} AS office_currency_code,
     CAST(actual_amount_oc AS DOUBLE) AS actual_amount_oc,
-    COALESCE(CAST(group_currency_code AS STRING), 'Unknown') AS group_currency_code,
+    {clean_string("group_currency_code")} AS group_currency_code,
     CAST(actual_amount_gc AS DOUBLE) AS actual_amount_gc,
     CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
     CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
     TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
 
-    --metadata
     CAST(_ingest_date AS DATE) AS _ingest_date,
     CAST(_source_file AS STRING) AS _source_file,
     CAST(_source_system AS STRING) AS _source_system,
     'efi' AS _table,
-    CAST("44444444-4444-4444-aaaa-aaaaaaaaaaaa" AS STRING) AS _lineage_id,
+    CAST('44444444-4444-4444-aaaa-aaaaaaaaaaaa' AS STRING) AS _lineage_id,
     CURRENT_TIMESTAMP() AS _effective_start_datetime,
     TO_TIMESTAMP('9999-12-31 23:59:59') AS _effective_end_datetime,
     TRUE AS _current_flag,
+
     md5(concat_ws('|',
-        coalesce(company_code,''),
-        coalesce(cost_center_code,''),
-        coalesce(gl_account_code,''),
-        coalesce(fe_code,''),
-        coalesce(fe_practice_group_code,''),
-        coalesce(fe_office_code,''),
-        coalesce(fe_team_code,''),
-        coalesce(lead_partner_code,''),
-        coalesce(lead_partner_practice_group_code,''),
-        coalesce(lead_partner_office_code,''),
-        coalesce(lead_partner_team_code,''),
-        coalesce(matter_code,''),
-        coalesce(document_type_code,''),
-        coalesce(document_currency_code,''),
-        coalesce(document_number, ''),
-        coalesce(office_currency_code,''),
-        coalesce(group_currency_code,''),
-        coalesce(posting_period,'')
+        {clean_string("company_code")},
+        {clean_string("company_region_src")},
+        {clean_string("profit_center_code")},
+        {clean_string("cost_center_code")},
+        {clean_string("gl_account_code")},
+        {clean_string("fe_code")},
+        {clean_string("fe_practice_group_code")},
+        {clean_string("fe_office_code")},
+        {clean_string("fe_team_code")},
+        {clean_string("lead_partner_code")},
+        {clean_string("lead_partner_practice_group_code")},
+        {clean_string("lead_partner_office_code")},
+        {clean_string("lead_partner_team_code")},
+        {clean_string("matter_code")},
+        {clean_string("vendor_code")},
+        {clean_string("document_text")},
+        {clean_string("document_number")},
+        {clean_string("document_type_code")},
+        {clean_string("posting_period")},
+        {clean_string("document_currency_code")},
+        {clean_string("office_currency_code")},
+        {clean_string("group_currency_code")}
     )) AS hashed_pk
 FROM {source_schema}.{source_table}
 """)
@@ -68,35 +133,24 @@ FROM {source_schema}.{source_table}
 display(df.limit(10))
 
 
-
-
-from pyspark.sql.functions import count
-
-# 1. Find duplicate hashed_pk values
 dup_keys_df = (
     df.groupBy("hashed_pk")
       .agg(count("*").alias("duplicate_count"))
       .filter("duplicate_count > 1")
+      .orderBy("duplicate_count", ascending=False)
 )
 
-print("Duplicate hashed_pk values:")
-dup_keys_df.show(50, truncate=False)
+print(f"Total duplicate hashed_pk groups: {dup_keys_df.count()}")
+display(dup_keys_df.limit(10))
 
-print(f"Total duplicate keys: {dup_keys_df.count()}")
-
-# 2. Bring back the actual duplicate records
 dup_records_df = (
     df.join(dup_keys_df.select("hashed_pk"), on="hashed_pk", how="inner")
       .orderBy("hashed_pk")
 )
 
-print("Sample duplicate records:")
-display(dup_records_df)
+display(dup_records_df.limit(10))
 
 
-
-
-from delta.tables import DeltaTable
 
 if not DeltaTable.isDeltaTable(spark, location_path):
     (
@@ -123,3 +177,14 @@ else:
     )
 
     print(f"Merged into {target_schema}.{target_table}")
+
+
+
+    display(
+    spark.sql(f"""
+    SELECT *
+    FROM {target_schema}.{target_table}
+    ORDER BY _effective_start_datetime DESC
+    LIMIT 20
+    """)
+)
