@@ -1,74 +1,138 @@
-from delta.tables import DeltaTable
-from pyspark.sql.functions import *
-
-def clean_unknown_sql(col_name: str) -> str:
-    return f"COALESCE(NULLIF(REPLACE(TRIM(CAST({col_name} AS STRING)), '#', 'Unknown'), ''), 'Unknown')"
-
-def proper_case_sql(col_name: str) -> str:
-    return f"INITCAP(LOWER({clean_unknown_sql(col_name)}))"
-
-def validate_duplicates(df, key_col="hashed_pk", limit=10):
-    dup_keys_df = (
-        df.groupBy(key_col)
-          .agg(count("*").alias("duplicate_count"))
-          .filter(col("duplicate_count") > 1)
-          .orderBy(col("duplicate_count").desc(), col(key_col))
-    )
-
-    total_dup_groups = dup_keys_df.count()
-    print(f"Total duplicate {key_col} groups: {total_dup_groups}")
-    display(dup_keys_df.limit(limit))
-
-    if total_dup_groups > 0:
-        dup_records_df = (
-            df.join(dup_keys_df.select(key_col), on=key_col, how="inner")
-              .orderBy(key_col)
-        )
-        display(dup_records_df.limit(limit))
-
-def merge_to_target(df, target_schema, target_table, location_path, merge_key="hashed_pk"):
-    full_table_name = f"{target_schema}.{target_table}"
-
-    if not DeltaTable.isDeltaTable(spark, location_path):
-        (
-            df.write
-            .format("delta")
-            .mode("overwrite")
-            .option("path", location_path)
-            .option("overwriteSchema", "true")
-            .saveAsTable(full_table_name)
-        )
-        print(f"Created {full_table_name}")
-    else:
-        delta_table = DeltaTable.forPath(spark, location_path)
-
-        (
-            delta_table.alias("t")
-            .merge(
-                df.alias("s"),
-                f"t.{merge_key} = s.{merge_key}"
-            )
-            .whenMatchedUpdateAll()
-            .whenNotMatchedInsertAll()
-            .execute()
-        )
-
-        print(f"Merged into {full_table_name}")
-
-
-
-
-
-# Cell 1
 %run nb_curated_shared_functions
 
+source_schema = "base_transactional"
+source_table = "tme"
+
+target_schema = "curated_transactional"
+target_table = "tme"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
+
+location_path = f"Files/curated/transactional/{target_table}"
+
+tbl_properties = """
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite'     = 'true',
+    'delta.autoOptimize.autoCompact'       = 'true',
+    'delta.logRetentionDuration'           = 'interval 30 days',
+    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
+)
+"""
 
 
 
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
+    tme_key                         BIGINT,
+    calendar_day                    STRING,
+    timekeeper_id                   STRING,
+    member_firm_code                STRING,
+    person_number                   STRING,
+    gender                          STRING,
+    practice_group_key              STRING,
+    office_key                      STRING,
+    team_key                        STRING,
+    employee_sub_group_key          STRING,
+    band_level_key                  STRING,
+    fte                             DOUBLE,
+    employment_status_code          STRING,
+    employment_status_description   STRING,
+    workday_flag                    STRING,
+    weekend_flag                    STRING,
+    holiday_flag                    STRING,
+    target_hours                    DOUBLE,
+    billable_hours                  DOUBLE,
+    non_billable_hours              DOUBLE,
+    pro_bono_hours                  DOUBLE,
+    firm_related_hours              DOUBLE,
+    leave_hours                     DOUBLE,
+    part_time_hours                 DOUBLE,
+    last_updated_date_utc_at_source TIMESTAMP,
 
-# Cell 6
+    _ingest_date                    DATE,
+    _source_file                    STRING,
+    _source_system                  STRING,
+    _table                          STRING,
+    _lineage_id                     STRING,
+    _effective_start_datetime       TIMESTAMP,
+    _effective_end_datetime         TIMESTAMP,
+    _current_flag                   BOOLEAN,
+    hashed_pk                       STRING
+)
+USING DELTA
+LOCATION '{location_path}'
+{tbl_properties}
+""")
+
+
+
+df = spark.sql(f"""
+SELECT DISTINCT
+    CAST(-1 AS BIGINT) AS tme_key,
+    CAST(calendar_day AS STRING) AS calendar_day,
+    CAST(timekeeper_id AS STRING) AS timekeeper_id,
+    CAST(region_src AS STRING) AS member_firm_code,
+    CAST(timekeeper_id AS STRING) AS person_number,
+    COALESCE(NULLIF(TRIM(CAST(gender AS STRING)), ''), 'Unknown') AS gender,
+    CAST(practice_group_code AS STRING) AS practice_group_key,
+    CAST(office_code AS STRING) AS office_key,
+    CAST(team_code AS STRING) AS team_key,
+    CAST(emp_sub_group_code AS STRING) AS employee_sub_group_key,
+    COALESCE(NULLIF(TRIM(CAST(band_level_code AS STRING)), ''), 'Unknown') AS band_level_key,
+    CAST(fte AS DOUBLE) AS fte,
+    CAST(employment_status_code AS STRING) AS employment_status_code,
+    CAST(employment_status_desc AS STRING) AS employment_status_description,
+    CAST(workday_flag AS STRING) AS workday_flag,
+    CAST(weekend_flag AS STRING) AS weekend_flag,
+    CAST(holiday_flag AS STRING) AS holiday_flag,
+    CAST(target_hours AS DOUBLE) AS target_hours,
+    CAST(billable_hours AS DOUBLE) AS billable_hours,
+    CAST(non_billable_hours AS DOUBLE) AS non_billable_hours,
+    CAST(pro_bono_hours AS DOUBLE) AS pro_bono_hours,
+    CAST(firm_related_hours AS DOUBLE) AS firm_related_hours,
+    CAST(leave_hours AS DOUBLE) AS leave_hours,
+    CAST(part_time_hours AS DOUBLE) AS part_time_hours,
+    TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
+
+    CAST(_ingest_date AS DATE) AS _ingest_date,
+    CAST(_source_file AS STRING) AS _source_file,
+    CAST(_source_system AS STRING) AS _source_system,
+    'tme' AS _table,
+    CAST('44444444-4444-4444-aaaa-aaaaaaaaaaaa' AS STRING) AS _lineage_id,
+    CURRENT_TIMESTAMP() AS _effective_start_datetime,
+    TO_TIMESTAMP('9999-12-31 23:59:59') AS _effective_end_datetime,
+    TRUE AS _current_flag,
+
+    md5(concat_ws('|',
+        coalesce(cast(calendar_day as string), ''),
+        coalesce(cast(timekeeper_id as string), ''),
+        coalesce(cast(region_src as string), ''),
+        coalesce(cast(practice_group_code as string), ''),
+        coalesce(cast(office_code as string), ''),
+        coalesce(cast(team_code as string), ''),
+        coalesce(cast(emp_sub_group_code as string), ''),
+        coalesce(cast(band_level_code as string), ''),
+        coalesce(cast(employment_status_code as string), ''),
+        coalesce(cast(workday_flag as string), ''),
+        coalesce(cast(weekend_flag as string), ''),
+        coalesce(cast(holiday_flag as string), ''),
+        coalesce(cast(cal_period as string), '')
+    )) AS hashed_pk
+FROM {source_schema}.{source_table}
+""")
+
+display(df.limit(10))
+
+
+
 validate_duplicates(df, "hashed_pk", 10)
 
 
-# Cell 7
 merge_to_target(df, target_schema, target_table, location_path, "hashed_pk")
+
+
+display(spark.sql(f"""
+SELECT COUNT(*) AS total_rows
+FROM {target_schema}.{target_table}
+"""))
