@@ -1,144 +1,15 @@
-%run nb_base_shared_functions
-
-import json
-from datetime import date
-import pyspark.sql.functions as F
-
-
-manual_source_settings = {
-    "workspace_id": "a7ad27b1-6ad7-440f-bf78-030662ef90fd",
-    "lakehouse_id": "6c777342-6ab0-4f34-8ec8-4eb29b1a8ea7",
-    "folder_path": "Files/transactional_data",
-    "source_system": "lh_global_external_curated",
-    "table_config": [
-        {"source_file": "EFI.csv", "target_table": "efi"},
-        {"source_file": "TME.csv", "target_table": "tme"},
-        {"source_file": "ChronoMetrics.csv", "target_table": "chrono_metrics"}
-    ]
-}
-
-manual_target_settings = {
-    "workspace_id": "a7ad27b1-6ad7-440f-bf78-030662ef90fd",
-    "lakehouse_id": "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a",
-    "schema_name": "base_transactional",
-    "folder_path": "Files/base/transactional",
-    "load_strategy": "overwrite"
-}
-
-
-if 'source_settings' in globals() and source_settings:
-    source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-else:
-    source_settings = manual_source_settings
-
-if 'target_settings' in globals() and target_settings:
-    target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-else:
-    target_settings = manual_target_settings
-
-
-
-source_workspace = source_settings.get("workspace_id")
-source_lakehouse = source_settings.get("lakehouse_id")
-source_folder = source_settings.get("folder_path")
-source_system = source_settings.get("source_system", "lh_global_external_curated")
-table_config = source_settings.get("table_config", [])
-
-target_workspace = target_settings.get("workspace_id")
-target_lakehouse = target_settings.get("lakehouse_id")
-target_schema = target_settings.get("schema_name")
-target_folder = target_settings.get("folder_path")
-target_load_strategy = target_settings.get("load_strategy", "overwrite")
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
-print(f"Schema ready: {target_schema}")
-
-
-for cfg in table_config:
-    source_file = cfg["source_file"]
-    target_table = cfg["target_table"]
-
-    full_table = f"{target_schema}.{target_table}"
-    target_path = f"{target_folder}/{target_table}"
-
-    source_file_path = (
-        f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/"
-        f"{source_lakehouse}/{source_folder}/{source_file}"
-    )
-
-    print(f"Processing {source_file} -> {full_table}")
-
-    df = (
-        spark.read.format("csv")
-        .option("header", "true")
-        .option("inferSchema", "true")
-        .option("delimiter", ",")
-        .load(source_file_path)
-    )
-
-    df = clean_bronze_table(df)
-
-    before_count = df.count()
-    df = remove_exact_duplicates(df)
-    after_count = df.count()
-
-    print(f"{source_file} removed {before_count - after_count} duplicate rows")
-
-    df = add_metadata(
-        df=df,
-        ingest_date=str(date.today()),
-        file_path=source_file_path,
-        schema_name=source_system,
-        table_name=target_table,
-        lineage_id=new_lineage_id()
-    )
-
-    if not spark.catalog.tableExists(full_table):
-        (
-            df.write
-            .format("delta")
-            .mode("overwrite")
-            .option("path", target_path)
-            .option("mergeSchema", "true")
-            .saveAsTable(full_table)
-        )
-        print(f"Created {full_table}")
-    else:
-        if target_load_strategy == "overwrite":
-            (
-                df.write
-                .format("delta")
-                .mode("overwrite")
-                .option("mergeSchema", "true")
-                .save(target_path)
-            )
-            print(f"Overwrote {full_table}")
-        elif target_load_strategy == "append":
-            (
-                df.write
-                .format("delta")
-                .mode("append")
-                .option("mergeSchema", "true")
-                .save(target_path)
-            )
-            print(f"Appended into {full_table}")
-        else:
-            raise ValueError(f"Unsupported load_strategy: {target_load_strategy}")
-
-
-for cfg in table_config:
-    target_table = cfg["target_table"]
-    full_table = f"{target_schema}.{target_table}"
-
-    result_df = spark.table(full_table)
-    print(f"{full_table}: {result_df.count()} rows")
-    display(result_df.limit(5))
-
-
 import re
 import uuid
-import pyspark.sql.functions as F
 from pyspark.sql import DataFrame
+import pyspark.sql.functions as F
+
+
+def param_or_default(*names, default=None):
+    for name in names:
+        value = globals().get(name)
+        if value not in (None, ""):
+            return value
+    return default
 
 
 def to_snake_case(string):
@@ -147,24 +18,40 @@ def to_snake_case(string):
     string = string.lower().strip()
     return string
 
+
 def trim_all_string_columns(df):
-    string_columns = [field.name for field in df.schema.fields if field.dataType.typeName() == 'string']
-    df = df.select(
-        *[F.trim(F.col(c)).alias(c) if c in string_columns else F.col(c) for c in df.columns]
+    string_columns = [
+        field.name
+        for field in df.schema.fields
+        if field.dataType.typeName() == "string"
+    ]
+
+    return df.select(
+        *[
+            F.trim(F.col(c)).alias(c) if c in string_columns else F.col(c)
+            for c in df.columns
+        ]
     )
-    return df
+
 
 def replace_old_dates(df):
-    date_columns = [field.name for field in df.schema.fields if field.dataType.typeName() in ('date', 'timestamp')]
+    date_columns = [
+        field.name
+        for field in df.schema.fields
+        if field.dataType.typeName() in ("date", "timestamp")
+    ]
+
     for date_column in date_columns:
         df = df.withColumn(
             date_column,
             F.when(
-                F.col(date_column) <= '1900-01-01',
-                F.to_date(F.lit('1900-01-01'), 'yyyy-MM-dd')
+                F.col(date_column) <= "1900-01-01",
+                F.to_date(F.lit("1900-01-01"), "yyyy-MM-dd")
             ).otherwise(F.col(date_column))
         )
+
     return df
+
 
 def clean_bronze_table(df, limit_rows_for_debugging=False):
     if limit_rows_for_debugging:
@@ -178,19 +65,185 @@ def clean_bronze_table(df, limit_rows_for_debugging=False):
     return df
 
 
-def add_metadata(df: DataFrame, ingest_date: str, file_path: str, schema_name: str, table_name: str, lineage_id: str) -> DataFrame:
+def add_metadata(
+    df: DataFrame,
+    ingest_date: str,
+    file_path: str,
+    source_system: str,
+    table_name: str,
+    lineage_id: str
+) -> DataFrame:
     return (
         df
-            .withColumn("_ingest_time", F.current_timestamp())
-            .withColumn("_ingest_date", F.lit(ingest_date))
-            .withColumn("_source_file", F.lit(file_path))
-            .withColumn("_source_system", F.lit(schema_name))
-            .withColumn("_table", F.lit(table_name))
-            .withColumn("_lineage_id", F.lit(lineage_id))
+        .withColumn("_ingest_time", F.current_timestamp())
+        .withColumn("_ingest_date", F.to_date(F.lit(ingest_date)))
+        .withColumn("_source_file", F.lit(file_path))
+        .withColumn("_source_system", F.lit(source_system))
+        .withColumn("_table", F.lit(table_name))
+        .withColumn("_lineage_id", F.lit(lineage_id))
     )
+
 
 def remove_exact_duplicates(df):
     return df.dropDuplicates(df.columns)
 
+
 def new_lineage_id():
     return str(uuid.uuid4())
+
+
+
+# Cell 1
+%%configure
+{
+  "defaultLakehouse": {
+    "id": {
+      "parameterName": "target_lakehouse_id",
+      "defaultValue": "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a"
+    },
+    "workspaceId": {
+      "parameterName": "target_workspace_id",
+      "defaultValue": "a7ad27b1-6ad7-440f-bf78-030662ef90fd"
+    }
+  }
+}
+
+# Cell 2
+%run nb_transactional_shared_functions
+
+# Cell 3
+from datetime import date
+
+# Cell 4
+source_workspace_id = param_or_default(
+    "source_workspace_id",
+    default="a7ad27b1-6ad7-440f-bf78-030662ef90fd"
+)
+
+source_lakehouse_id = param_or_default(
+    "source_lakehouse_id",
+    default="6c777342-6ab0-4f34-8ec8-4eb29b1a8ea7"
+)
+
+source_folder = param_or_default(
+    "source_folder",
+    default="Files/transactional_data"
+)
+
+source_system = param_or_default(
+    "source_system",
+    default="lh_global_external_curated"
+)
+
+target_workspace_id = param_or_default(
+    "target_workspace_id",
+    default="a7ad27b1-6ad7-440f-bf78-030662ef90fd"
+)
+
+target_lakehouse_id = param_or_default(
+    "target_lakehouse_id",
+    default="d66a8795-61e5-4bd3-97ab-b9eb6508bf5a"
+)
+
+target_schema = param_or_default(
+    "target_schema",
+    default="base_transactional"
+)
+
+target_load_strategy = param_or_default(
+    "target_load_strategy",
+    default="overwrite"
+)
+
+limit_rows_for_debugging = param_or_default(
+    "limit_rows_for_debugging",
+    default=False
+)
+
+if isinstance(limit_rows_for_debugging, str):
+    limit_rows_for_debugging = limit_rows_for_debugging.lower() == "true"
+
+
+# Cell 5
+table_config = [
+    {"source_file": "EFI.csv", "target_table": "efi"},
+    {"source_file": "TME.csv", "target_table": "tme"},
+    {"source_file": "ChronoMetrics.csv", "target_table": "chrono_metrics"}
+]
+
+# Cell 6
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+print(f"Schema ready: {target_schema}")
+print(f"Target workspace id: {target_workspace_id}")
+print(f"Target lakehouse id: {target_lakehouse_id}")
+print(f"Load strategy: {target_load_strategy}")
+
+
+# Cell 7
+for cfg in table_config:
+    source_file = cfg["source_file"]
+    target_table = cfg["target_table"]
+    full_table = f"{target_schema}.{target_table}"
+
+    source_file_path = (
+        f"abfss://{source_workspace_id}@onelake.dfs.fabric.microsoft.com/"
+        f"{source_lakehouse_id}.Lakehouse/{source_folder}/{source_file}"
+    )
+
+    print(f"Processing {source_file} -> {full_table}")
+    print(f"Source path: {source_file_path}")
+
+    df = (
+        spark.read.format("csv")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .option("delimiter", ",")
+        .load(source_file_path)
+    )
+
+    df = clean_bronze_table(df, limit_rows_for_debugging)
+
+    before_count = df.count()
+    df = remove_exact_duplicates(df)
+    after_count = df.count()
+
+    print(f"{source_file} removed {before_count - after_count} duplicate rows")
+
+    df = add_metadata(
+        df=df,
+        ingest_date=str(date.today()),
+        file_path=source_file_path,
+        source_system=source_system,
+        table_name=target_table,
+        lineage_id=new_lineage_id()
+    )
+
+    if target_load_strategy == "overwrite":
+        (
+            df.write
+            .format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .saveAsTable(full_table)
+        )
+        print(f"Overwrote {full_table}")
+
+    elif target_load_strategy == "append":
+        (
+            df.write
+            .format("delta")
+            .mode("append")
+            .option("mergeSchema", "true")
+            .saveAsTable(full_table)
+        )
+        print(f"Appended into {full_table}")
+
+    else:
+        raise ValueError(f"Unsupported load_strategy: {target_load_strategy}")
+
+
+    # Cell 8
+for cfg in table_config:
+    full_table = f"{target_schema}.{cfg['target_table']}"
+    print(full_table)
+    display(spark.sql(f"SELECT COUNT(*) AS total_rows FROM {full_table}"))
