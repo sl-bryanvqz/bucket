@@ -1,70 +1,74 @@
-df = spark.sql(f"""
-SELECT DISTINCT
-    CAST(-1 AS BIGINT) AS efi_key,
-    COALESCE(CAST(unit AS STRING), 'Unknown') AS unit,
-    CAST(company_code AS STRING) AS company_key,
-    COALESCE(CAST(company_region_src AS STRING), 'Unknown') AS member_firm_code,
-    COALESCE(CAST(profit_center_code AS STRING), 'Unknown') AS profit_center_code,
-    COALESCE(CAST(cost_center_code AS STRING), 'Unknown') AS cost_center_code,
-    COALESCE(CAST(gl_account_code AS STRING), 'Unknown') AS gl_account_code,
-    COALESCE(CAST(fe_code AS STRING), 'Unknown') AS fe_person_number,
-    CAST(REPLACE(fe_practice_group_code,'#', 'Unknown') AS STRING) AS fe_practice_group_key,
-    CAST(fe_office_code AS STRING) AS fe_office_key,
-    CAST(fe_team_code AS STRING) AS fe_team_key,
-    COALESCE(CAST(lead_partner_code AS STRING), 'Unknown') AS lead_partner_person_number,
-    CAST(lead_partner_practice_group_code AS STRING) AS lead_partner_practice_group_key,
-    CAST(lead_partner_office_code AS STRING) AS lead_partner_office_key,
-    CAST(lead_partner_team_code AS STRING) AS lead_partner_team_key,
-    COALESCE(CAST(matter_code AS STRING), 'Unknown') AS matter_number,
-    COALESCE(CAST(vendor_code AS STRING), 'Unknown') AS vendor_code,
-    COALESCE(CAST(document_text AS STRING), 'Unknown') AS document_text,
-    TO_DATE(CAST(document_date AS STRING), 'yyyyMMdd') AS document_date,
-    COALESCE(CAST(document_number AS STRING), 'Unknown') AS document_number,
-    CAST(document_type_code AS STRING) AS transaction_document_type_key,
-    COALESCE(CAST(posting_period AS STRING), 'Unknown') AS posting_period,
-    TO_DATE(CAST(posting_date AS STRING), 'yyyyMMdd') AS posting_date,
-    COALESCE(CAST(document_currency_code AS STRING), 'Unknown') AS document_currency_code,
-    CAST(actual_amount_dc AS DOUBLE) AS actual_amount_dc,
-    COALESCE(CAST(office_currency_code AS STRING), 'Unknown') AS office_currency_code,
-    CAST(actual_amount_oc AS DOUBLE) AS actual_amount_oc,
-    COALESCE(CAST(group_currency_code AS STRING), 'Unknown') AS group_currency_code,
-    CAST(actual_amount_gc AS DOUBLE) AS actual_amount_gc,
-    CAST(budget_amount_gc AS DOUBLE) AS budget_amount_gc,
-    CAST(forecast_amount_gc AS DOUBLE) AS forecast_amount_gc,
-    TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
+from delta.tables import DeltaTable
+from pyspark.sql.functions import *
 
-    --metadata
-    CAST(_ingest_date AS DATE) AS _ingest_date,
-    CAST(_source_file AS STRING) AS _source_file,
-    CAST(_source_system AS STRING) AS _source_system,
-    'efi' AS _table,
-    CAST("44444444-4444-4444-aaaa-aaaaaaaaaaaa" AS STRING) AS _lineage_id,
-    CURRENT_TIMESTAMP() AS _effective_start_datetime,
-    TO_TIMESTAMP('9999-12-31 23:59:59') AS _effective_end_datetime,
-    TRUE AS _current_flag,
-    md5(concat_ws('|',
-        coalesce(company_code,''),
-        coalesce(cost_center_code,''),
-        coalesce(gl_account_code,''),
-        coalesce(fe_code,''),
-        coalesce(fe_practice_group_code,''),
-        coalesce(fe_office_code,''),
-        coalesce(fe_team_code,''),
-        coalesce(lead_partner_code,''),
-        coalesce(lead_partner_practice_group_code,''),
-        coalesce(lead_partner_office_code,''),
-        coalesce(lead_partner_team_code,''),
-        coalesce(matter_code,''),
-        coalesce(document_type_code,''),
-        coalesce(document_currency_code,''),
-        coalesce(document_number, ''),
-        coalesce(office_currency_code,''),
-        coalesce(group_currency_code,''),
-        coalesce(posting_period,''),
-        coalesce(budget_amount_gc,''),
-        coalesce(actual_amount_dc,'')
-    )) AS hashed_pk
-FROM {source_schema}.{source_table}
-""")
+def clean_unknown_sql(col_name: str) -> str:
+    return f"COALESCE(NULLIF(REPLACE(TRIM(CAST({col_name} AS STRING)), '#', 'Unknown'), ''), 'Unknown')"
 
-display(df)
+def proper_case_sql(col_name: str) -> str:
+    return f"INITCAP(LOWER({clean_unknown_sql(col_name)}))"
+
+def validate_duplicates(df, key_col="hashed_pk", limit=10):
+    dup_keys_df = (
+        df.groupBy(key_col)
+          .agg(count("*").alias("duplicate_count"))
+          .filter(col("duplicate_count") > 1)
+          .orderBy(col("duplicate_count").desc(), col(key_col))
+    )
+
+    total_dup_groups = dup_keys_df.count()
+    print(f"Total duplicate {key_col} groups: {total_dup_groups}")
+    display(dup_keys_df.limit(limit))
+
+    if total_dup_groups > 0:
+        dup_records_df = (
+            df.join(dup_keys_df.select(key_col), on=key_col, how="inner")
+              .orderBy(key_col)
+        )
+        display(dup_records_df.limit(limit))
+
+def merge_to_target(df, target_schema, target_table, location_path, merge_key="hashed_pk"):
+    full_table_name = f"{target_schema}.{target_table}"
+
+    if not DeltaTable.isDeltaTable(spark, location_path):
+        (
+            df.write
+            .format("delta")
+            .mode("overwrite")
+            .option("path", location_path)
+            .option("overwriteSchema", "true")
+            .saveAsTable(full_table_name)
+        )
+        print(f"Created {full_table_name}")
+    else:
+        delta_table = DeltaTable.forPath(spark, location_path)
+
+        (
+            delta_table.alias("t")
+            .merge(
+                df.alias("s"),
+                f"t.{merge_key} = s.{merge_key}"
+            )
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+
+        print(f"Merged into {full_table_name}")
+
+
+
+
+
+# Cell 1
+%run nb_curated_shared_functions
+
+
+
+
+
+# Cell 6
+validate_duplicates(df, "hashed_pk", 10)
+
+
+# Cell 7
+merge_to_target(df, target_schema, target_table, location_path, "hashed_pk")
