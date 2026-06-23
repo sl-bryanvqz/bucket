@@ -1,5 +1,0 @@
-connection_name: 'Adventure Works Server'
-uses_fabric_connection: True
-
-connection_settings:
-    fabric_connection_id: "66a99e71-5de2-448b-80ae-d59e844c33f6"
