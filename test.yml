@@ -1,316 +1,42 @@
-# Fabric notebook source
-
-# METADATA ********************
-
-# META {
-# META   "kernel_info": {
-# META     "name": "synapse_pyspark"
-# META   },
-# META   "dependencies": {}
-# META }
-
-# MARKDOWN ********************
-
-# ##### Parameters
-
-# PARAMETERS CELL ********************
-
-# Framework-compatible parameters with manual fallbacks.
-# When pl_worker calls this notebook, it should pass these values.
-import json
-import uuid
-from datetime import date
-
-task_id = task_id or 0
-parent_run_id = parent_run_id or ""
-task_executions_id = task_executions_id or ""
-lineage_id = lineage_id or str(uuid.uuid4())
-source_connection_settings = source_connection_settings or "{}"
-limit_rows_for_debugging = limit_rows_for_debugging or False
-
-# Manual fallback for source settings.
-# In framework runs, pl_worker should pass source_settings directly.
-source_settings = source_settings or json.dumps({
-    "lakehouse_name": "lh_global_external_curated",
-    "folder_path": "Files/transactional_data",
-    "source_system": "lh_global_external_curated",
-    "table_config": [
-        {"source_file": "EFI.csv", "target_table": "efi"},
-        {"source_file": "TME.csv", "target_table": "tme"},
-        {"source_file": "ChronoMetrics.csv", "target_table": "chrono_metrics"}
-    ]
-})
-
-# Manual fallback for target settings.
-# In framework runs, pl_worker should pass target_settings directly.
-target_settings = target_settings or json.dumps({
-    "lakehouse_name": "lh_canada_global_mds",
-    "schema_name": "base_transactional",
-    "load_strategy": "overwrite"
-})
-
-if isinstance(limit_rows_for_debugging, str):
-    limit_rows_for_debugging = limit_rows_for_debugging.lower() == "true"
-
-
-
-
-
-
-
-
-    # METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Import shared functions and setup logging
-
-# CELL ********************
-
-%run nb_shared_functions
-
-
-
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# CELL ********************
-
-%run nb_transactional_shared_functions
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# CELL ********************
-
-# Standard framework logging setup.
-setup_logging()
-logger = logging.getLogger("LoadTransactionalToBase")
-logger.setLevel(logging.INFO)
-
-
-
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Parse settings
-
-# CELL ********************
-
-# Accept either JSON strings (framework) or already-parsed dicts (manual/debug).
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
-
-# Source configuration
-source_lakehouse_name = source_settings.get("lakehouse_name")
-source_folder_path = source_settings.get("folder_path")
-source_system = source_settings.get("source_system", source_lakehouse_name)
-table_config = source_settings.get("table_config", [])
-
-# Target configuration
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema = target_settings.get("schema_name")
-target_load_strategy = target_settings.get("load_strategy", "overwrite")
-
-# Validate required settings early.
-if not source_lakehouse_name:
-    raise ValueError("source_settings.lakehouse_name is required")
-
-if not source_folder_path:
-    raise ValueError("source_settings.folder_path is required")
-
-if not target_lakehouse_name:
-    raise ValueError("target_settings.lakehouse_name is required")
-
-if not target_schema:
-    raise ValueError("target_settings.schema_name is required")
-
-if target_load_strategy not in ["overwrite", "append"]:
-    raise ValueError("target_settings.load_strategy must be overwrite or append")
-
-if not table_config:
-    raise ValueError("source_settings.table_config is required and cannot be empty")
-
-
-
-
-    # METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Resolve lakehouse paths
-
-# CELL ********************
-
-# Resolve lakehouse storage paths by name.
-# This is the framework-friendly replacement for %%configure and scalar ID parameters.
-source_lakehouse_path = notebookutils.lakehouse.get(source_lakehouse_name).properties["abfsPath"]
-target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
-
-logger.info(f"task_id: {task_id}")
-logger.info(f"parent_run_id: {parent_run_id}")
-logger.info(f"task_executions_id: {task_executions_id}")
-logger.info(f"lineage_id: {lineage_id}")
-logger.info(f"source_lakehouse_name: {source_lakehouse_name}")
-logger.info(f"target_lakehouse_name: {target_lakehouse_name}")
-logger.info(f"target_schema: {target_schema}")
-logger.info(f"target_load_strategy: {target_load_strategy}")
-
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Main execution
-
-# CELL ********************
-
-# Keep a simple overall status for manual validation now.
-# Later, if needed, this can hook into framework status updates.
-status = "Failed"
-
-try:
-    for cfg in table_config:
-        source_file = cfg["source_file"]
-        target_table = cfg["target_table"]
-
-        # Build source file path and target delta table path.
-        source_file_path = f"{source_lakehouse_path}/{source_folder_path}/{source_file}"
-        target_table_path = f"{target_lakehouse_path}/Tables/{target_schema}/{target_table}"
-
-        logger.info(f"Processing {source_file} -> {target_schema}.{target_table}")
-        logger.info(f"Source path: {source_file_path}")
-        logger.info(f"Target path: {target_table_path}")
-
-        # Read source CSV file.
-        df = (
-            spark.read.format("csv")
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .option("delimiter", ",")
-            .load(source_file_path)
-        )
-
-        # Apply framework-aligned cleanup.
-        df = clean_bronze_table(df, limit_rows_for_debugging)
-
-        # Remove exact duplicate rows.
-        before_count = df.count()
-        df = remove_exact_duplicates(df)
-        after_count = df.count()
-
-        logger.info(f"{source_file} removed {before_count - after_count} duplicate rows")
-
-        # Stamp framework metadata columns.
-        df = add_metadata(
-            df=df,
-            ingest_date=str(date.today()),
-            file_path=source_file_path,
-            schema_name=source_system,
-            table_name=target_table,
-            lineage_id=lineage_id
-        )
-
-        # Write to the target table path.
-        # For this base notebook we only care about overwrite/append.
-        load_to_target(df, target_table_path, target_load_strategy)
-
-        logger.info(f"Loaded {source_file} into {target_table_path}")
-
-    status = "Completed"
-
-except Exception:
-    logger.exception("Processing error.")
-    status = "Failed"
-    raise
-
-
-
-    # METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Validation
-
-# CELL ********************
-
-# Read back from the target paths so manual validation does not depend
-# on SQL table registration in the notebook's default lakehouse.
-for cfg in table_config:
-    target_table = cfg["target_table"]
-    target_table_path = f"{target_lakehouse_path}/Tables/{target_schema}/{target_table}"
-
-    df_check = spark.read.format("delta").load(target_table_path)
-    print(f"{target_schema}.{target_table}: {df_check.count()} rows")
-    display(df_check.limit(5))
-
-
-
-    # METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# MARKDOWN ********************
-
-# ##### Result
-
-# CELL ********************
-
-# Handy result for manual runs now.
-# Later this can be expanded if a caller wants notebook exit output.
-result = {
-    "status": status,
-    "task_id": task_id,
-    "task_executions_id": task_executions_id,
-    "lineage_id": lineage_id,
-    "source_lakehouse_name": source_lakehouse_name,
-    "target_lakehouse_name": target_lakehouse_name,
-    "target_schema": target_schema,
-    "tables_processed": [cfg["target_table"] for cfg in table_config]
-}
-
-print(result)
+def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
+    # If the target table path does not exist yet, create it.
+    if not DeltaTable.isDeltaTable(spark, target_table_path):
+        logger.info(f'Writing new table to {target_table_path}')
+        source_df_cleaned.write.format('delta').mode("overwrite").save(target_table_path)
+
+    else:
+        match target_load_strategy:
+            case 'merge':
+                logger.info(f'Merging new records into {target_table_path}')
+                delta_table = DeltaTable.forPath(spark, target_table_path)
+                (
+                    delta_table.alias("t").merge(
+                        source_df_cleaned.alias("s"),
+                        't.hashed_pk = s.hashed_pk'
+                    ).whenMatchedUpdateAll()
+                    .whenNotMatchedInsertAll()
+                    .execute()
+                )
+
+            case 'overwrite':
+                logger.info(f'Overwriting records in {target_table_path}')
+                (
+                    source_df_cleaned
+                    .write.mode("overwrite")
+                    .format("delta")
+                    .option("overwriteSchema", "true")
+                    .save(target_table_path)
+                )
+
+            case 'append':
+                logger.info(f'Appending new records to {target_table_path}')
+                (
+                    source_df_cleaned
+                    .write.mode("append")
+                    .format("delta")
+                    .option("mergeSchema", "true")
+                    .save(target_table_path)
+                )
+
+            case _:
+                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
