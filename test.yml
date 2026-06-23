@@ -1,6 +1,43 @@
-{"template_type":"Notebook","template_name":"nb_load_transactional_to_base"}
+tables:
+  - object_name: "transactional_base_batch"
+    stage:
+      - "Load to bronze"
+    enabled: "false"
+    enable_retries: false
+    max_retry_attempts: 0
 
-"{\"lakehouse_name\":\"lh_global_external_curated\",\"folder_path\":\"Files/transactional_data\",\"source_system\":\"lh_global_external_curated\",\"table_config\":[{\"source_file\":\"EFI.csv\",\"target_table\":\"efi\"},{\"source_file\":\"TME.csv\",\"target_table\":\"tme\"},{\"source_file\":\"ChronoMetrics.csv\",\"target_table\":\"chrono_metrics\"}]}"
+    source_connections:
+      - load_to_bronze:
+          source_connection_name: "conn_fabric_notebook"
 
-"{\"lakehouse_name\":\"lh_canada_global_mds\",\"schema_name\":\"base_transactional\",\"load_strategy\":\"overwrite\"}"
+    source_settings:
+      - load_to_bronze:
+          task_name: "Load transactional files to base"
+          lakehouse_name: "lh_global_external_curated"
+          folder_path: "Files/transactional_data"
+          source_system: "lh_global_external_curated"
+          target_file_path: "transactional_data"
+          target_file_name: "transactional_batch"
+          target_file_type: "csv"
+          table_config:
+            - source_file: "EFI.csv"
+              target_table: "efi"
+            - source_file: "TME.csv"
+              target_table: "tme"
+            - source_file: "ChronoMetrics.csv"
+              target_table: "chrono_metrics"
 
+    target_settings:
+      - load_to_bronze:
+          lakehouse_name: "lh_canada_global_mds"
+          schema_name: "base_transactional"
+          table_name: "transactional_batch"
+          load_strategy: "overwrite"
+
+    template_settings:
+      - load_to_bronze:
+          template_type: "Notebook"
+          template_name: "nb_load_transactional_to_base"
+
+    option_settings:
+      - load_to_bronze: {}
