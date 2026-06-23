@@ -1,4 +1,6 @@
-{"lakehouse_name":"lh_global_external_curated","folder_path":"Files/transactional_data","source_system":"lh_global_external_curated","table_config":[{"source_file":"EFI.csv","target_table":"efi"},{"source_file":"TME.csv","target_table":"tme"},{"source_file":"ChronoMetrics.csv","target_table":"chrono_metrics"}]}
-{"lakehouse_name":"lh_canada_global_mds","schema_name":"base_transactional","load_strategy":"overwrite"}
 {"template_type":"Notebook","template_name":"nb_load_transactional_to_base"}
-2026-06-23T12:00:00Z
+
+"{\"lakehouse_name\":\"lh_global_external_curated\",\"folder_path\":\"Files/transactional_data\",\"source_system\":\"lh_global_external_curated\",\"table_config\":[{\"source_file\":\"EFI.csv\",\"target_table\":\"efi\"},{\"source_file\":\"TME.csv\",\"target_table\":\"tme\"},{\"source_file\":\"ChronoMetrics.csv\",\"target_table\":\"chrono_metrics\"}]}"
+
+"{\"lakehouse_name\":\"lh_canada_global_mds\",\"schema_name\":\"base_transactional\",\"load_strategy\":\"overwrite\"}"
+
