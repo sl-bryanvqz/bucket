@@ -1,0 +1,281 @@
+# Fabric notebook source
+
+# METADATA ********************
+
+# META {
+# META   "kernel_info": {
+# META     "name": "synapse_pyspark"
+# META   },
+# META   "dependencies": {}
+# META }
+
+# MARKDOWN ********************
+
+# ##### Configuration and imports
+
+# CELL ********************
+
+import ast
+import datetime
+import logging
+import re
+import uuid
+
+from delta.tables import DeltaTable
+import pyspark.sql.functions as F
+from pyspark.sql import DataFrame
+
+# Simple fallback logger.
+# The calling notebook should still run:
+#   %run nb_shared_functions
+#   setup_logging()
+#   logger = logging.getLogger("YourNotebookName")
+logger = logging.getLogger("TransactionalShared")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# ##### Load to csv
+
+# CELL ********************
+
+# Temporary helper for manual notebook runs.
+# Not a framework core function, but useful while notebooks transition.
+def param_or_default(*names, default=None):
+    for name in names:
+        value = globals().get(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+# Convert a string (usually a column name) to snake_case.
+# Purpose: keep column names consistent across all notebooks.
+def to_snake_case(string):
+    string = re.sub(r'([a-z])([A-Z0-9])', r'\1_\2', string)
+    string = re.sub(r'([A-Z])([A-Z][a-z])', r'\1_\2', string)
+    string = string.lower().strip()
+    return string
+
+
+# Remove leading and trailing spaces from all string columns.
+# Input: Spark DataFrame
+def trim_all_string_columns(df):
+    string_columns = [field.name for field in df.schema.fields if field.dataType.typeName() == 'string']
+    df = df.select(
+        *[F.trim(F.col(c)).alias(c) if c in string_columns else F.col(c) for c in df.columns]
+    )
+    return df
+
+
+# Replace invalid or very old dates with 1900-01-01.
+# Input: Spark DataFrame
+def replace_old_dates(df):
+    date_columns = [field.name for field in df.schema.fields if field.dataType.typeName() in ('date', 'timestamp')]
+    for date_column in date_columns:
+        df = df.withColumn(
+            date_column,
+            F.when(
+                F.col(date_column) <= '1900-01-01',
+                F.to_date(F.lit('1900-01-01'), 'yyyy-MM-dd')
+            ).otherwise(
+                F.col(date_column)
+            )
+        )
+    return df
+
+
+# Parent cleaning function.
+# Applies all standard base/bronze cleanup steps in one place.
+def clean_bronze_table(df, limit_rows_for_debugging=False):
+    if limit_rows_for_debugging:
+        df = df.limit(1000)
+
+    snake_case_column_names = [to_snake_case(col) for col in df.columns]
+    df = df.toDF(*snake_case_column_names)
+
+    df = replace_old_dates(df)
+    df = trim_all_string_columns(df)
+
+    return df
+
+
+# Add framework audit / metadata columns to a dataframe.
+# This should use the lineage_id passed in by the pipeline.
+def add_metadata(df: DataFrame, ingest_date: str, file_path: str, schema_name: str, table_name: str, lineage_id: str) -> DataFrame:
+    return (
+        df
+            .withColumn("_ingest_time", F.current_timestamp())
+            .withColumn("_ingest_date", F.lit(ingest_date))
+            .withColumn("_source_file", F.lit(file_path))
+            .withColumn("_source_system", F.lit(schema_name))
+            .withColumn("_table", F.lit(table_name))
+            .withColumn("_lineage_id", F.lit(lineage_id))
+    )
+
+
+# Remove exact duplicate rows across the whole dataframe.
+def remove_exact_duplicates(df):
+    return df.dropDuplicates(df.columns)
+
+
+# Temporary helper for older notebooks that still generate lineage locally.
+# Framework-driven notebooks should use the lineage_id passed in by pl_worker.
+def new_lineage_id():
+    return str(uuid.uuid4())
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# MARKDOWN ********************
+
+# # TRANSACTIONAL TO CURATED
+
+# CELL ********************
+
+# Update pipeline execution status in the metadata database.
+# This is framework behavior used after notebook completion.
+def update_stage_status(status: str, log_run_data: list, metadata_db):
+    """Update metadata database records for current and previous stages."""
+
+    # Map notebook result to current-stage and previous-stage status values.
+    status_config = {
+        'Completed': {'current': 'Ready', 'previous': 'Processed'},
+        'Failed': {'current': 'N/A', 'previous': 'Failed'},
+        'No files to process': {'current': 'N/A', 'previous': 'No files to process'}
+    }
+
+    config = status_config.get(status, {'current': 'N/A', 'previous': 'N/A'})
+
+    try:
+        # Accept either a Python list or a string representation of a list.
+        records = ast.literal_eval(log_run_data) if isinstance(log_run_data, str) else log_run_data
+    except Exception:
+        logger.exception('log_run_data is not valid; skipping updates')
+        records = []
+
+    for record in records:
+        # Update current stage execution row.
+        try:
+            logger.info(f"Updating current stage logs for {record['current_task_executions_id']}")
+            metadata_db.execute_stored_procedure(
+                'logging.usp_log_task_execution_completion',
+                False,
+                task_executions_id=record['current_task_executions_id'],
+                status=status,
+                next_stage_status=config['current']
+            )
+        except Exception:
+            logger.exception(f"Failed to update current stage for {record['current_task_executions_id']}")
+
+        # Update previous stage execution row.
+        try:
+            metadata_db.execute_stored_procedure(
+                'logging.usp_update_processed_flag',
+                False,
+                task_executions_id=record['previous_task_executions_id'],
+                next_stage_status=config['previous']
+            )
+        except Exception:
+            logger.exception(f"Failed to update previous stage for {record['previous_task_executions_id']}")
+
+
+# Check for duplicate business keys and display samples.
+# Useful for curated debugging before merge.
+def validate_duplicates(df, key_col="hashed_pk", limit=10):
+    dup_keys_df = (
+        df.groupBy(key_col)
+          .agg(F.count("*").alias("duplicate_count"))
+          .filter(F.col("duplicate_count") > 1)
+          .orderBy(F.col("duplicate_count").desc(), F.col(key_col))
+    )
+
+    total_dup_groups = dup_keys_df.count()
+    print(f"Total duplicate {key_col} groups: {total_dup_groups}")
+    display(dup_keys_df.limit(limit))
+
+    if total_dup_groups > 0:
+        dup_records_df = (
+            df.join(dup_keys_df.select(key_col), on=key_col, how="inner")
+              .orderBy(key_col)
+        )
+        display(dup_records_df.limit(limit))
+
+
+# Framework-aligned target load helper.
+# For now we only keep:
+# - merge
+# - generic write path for overwrite / append
+# We intentionally do not keep SCD branches here because they require hashed_row logic.
+def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
+    # If the target table path does not exist yet, create it.
+    if not DeltaTable.isDeltaTable(spark, target_table_path):
+        logger.info(f'Writing new table to {target_table_path}')
+        source_df_cleaned.write.format('delta').mode("overwrite").save(target_table_path)
+
+    else:
+        match target_load_strategy:
+            case 'merge':
+                logger.info(f'Merging new records into {target_table_path}')
+                delta_table = DeltaTable.forPath(spark, target_table_path)
+                (
+                    delta_table.alias("t").merge(
+                        source_df_cleaned.alias("s"),
+                        't.hashed_pk = s.hashed_pk'
+                    ).whenMatchedUpdateAll()
+                    .whenNotMatchedInsertAll()
+                    .execute()
+                )
+
+            case _:
+                logger.info(f'Writing new records to {target_table_path} via {target_load_strategy}')
+                (
+                    source_df_cleaned
+                    .write.mode(target_load_strategy)
+                    .format("delta")
+                    .option("mergeSchema", "true")
+                    .save(target_table_path)
+                )
+
+
+# Compatibility wrapper for existing curated notebooks.
+# Keep this for now so older notebooks do not fail while you transition to load_to_target().
+def merge_to_target(df, target_schema, target_table, location_path, merge_key="hashed_pk"):
+    full_table_name = f"{target_schema}.{target_table}"
+
+    # Older notebooks may pass a different merge key name.
+    # Rename only if hashed_pk does not already exist.
+    if merge_key != "hashed_pk" and "hashed_pk" not in df.columns:
+        df = df.withColumnRenamed(merge_key, "hashed_pk")
+
+    # Keep the old create behavior so current curated notebooks continue to work.
+    if not DeltaTable.isDeltaTable(spark, location_path):
+        (
+            df.write
+            .format("delta")
+            .mode("overwrite")
+            .option("path", location_path)
+            .option("overwriteSchema", "true")
+            .saveAsTable(full_table_name)
+        )
+        print(f"Created {full_table_name}")
+    else:
+        load_to_target(df, location_path, "merge")
+        print(f"Merged into {full_table_name}")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
