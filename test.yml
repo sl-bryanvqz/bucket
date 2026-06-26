@@ -1,362 +1,176 @@
-# Fabric notebook source
-
-# METADATA ********************
-
-# META {
-# META   "kernel_info": {
-# META     "name": "synapse_pyspark"
-# META   },
-# META   "dependencies": {
-# META     "lakehouse": {
-# META       "default_lakehouse": "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a",
-# META       "default_lakehouse_name": "lh_canada_global_mds",
-# META       "default_lakehouse_workspace_id": "a7ad27b1-6ad7-440f-bf78-030662ef90fd",
-# META       "known_lakehouses": [
-# META         {
-# META           "id": "d66a8795-61e5-4bd3-97ab-b9eb6508bf5a"
-# META         }
-# META       ]
-# META     }
-# META   }
-# META }
-
-# PARAMETERS CELL ********************
-
+# Framework-compatible parameters with manual fallbacks.
+# When pl_worker calls this notebook, it should pass these values.
 import json
+import uuid
+import logging
+from datetime import date
 
-source_settings = "{}"
-target_settings = "{}"
-source_connection_settings = "{}"
-lineage_id = ""
-task_executions_id = ""
-task_id = 0
+task_id = 50
 parent_run_id = ""
+task_executions_id = ""
+lineage_id = str(uuid.uuid4())
+source_connection_settings = "{}"
+limit_rows_for_debugging = False
 
-# CELL ********************
+# Manual fallback for source settings.
+source_settings = json.dumps({
+    "lakehouse_name": "lh_canada_global_mds",
+    "folder_path": "Files/silver/silver_transactional_csv",
+    "source_system": "lh_canada_global_mds",
+    "table_config": [
+        {"source_file": "EFI.csv", "target_table": "silver_transactional_efi"},
+        {"source_file": "TME.csv", "target_table": "silver_transactional_tme"},
+        {"source_file": "ChronoMetrics.csv", "target_table": "silver_transactional_chrono_metrics"}
+    ]
+})
+
+# Manual fallback for target settings.
+target_settings = json.dumps({
+    "lakehouse_name": "lh_canada_global_mds",
+    "schema_name": "silver_transactional",
+    "load_strategy": "overwrite"
+})
+
+
+
 
 %run nb_transactional_shared_functions
 
-# METADATA ********************
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
 
-# CELL ********************
+# Standard framework logging setup.
+setup_logging()
+logger = logging.getLogger("LoadTransactionalToSilver")
+logger.setLevel(logging.INFO)
 
-import pyspark.sql.functions as F
 
-# METADATA ********************
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
 
-# CELL ********************
-
-# Parse framework settings passed by pl_worker.
+# Accept either JSON strings (framework) or already-parsed dicts (manual/debug).
 source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
 target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
 source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
 
-# Keep manual defaults so the notebook can still be run directly.
-source_schema = source_settings.get("schema_name", "base_transactional")
-source_table = source_settings.get("table_name", "chrono_metrics")
+# Source configuration
+source_lakehouse_name = source_settings.get("lakehouse_name")
+source_folder_path = source_settings.get("folder_path")
+source_system = source_settings.get("source_system", source_lakehouse_name)
+table_config = source_settings.get("table_config", [])
 
-target_schema = target_settings.get("schema_name", "curated_transactional")
-target_table = target_settings.get("table_name", "chrono_metrics")
+# Target configuration
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema = target_settings.get("schema_name")
+target_load_strategy = target_settings.get("load_strategy", "overwrite")
 
-# Use framework lineage when present; keep the old fallback for manual runs.
-effective_lineage_id = lineage_id or "44444444-4444-4444-aaaa-aaaaaaaaaaaa"
+# Resolve lakehouse storage paths by name.
+source_lakehouse_path = notebookutils.lakehouse.get(source_lakehouse_name).properties["abfsPath"]
+target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
 
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+logger.info(f"Source lakehouse: {source_lakehouse_name}")
+logger.info(f"Target lakehouse: {target_lakehouse_name}")
+logger.info(f"Target schema: {target_schema}")
+logger.info(f"Load strategy: {target_load_strategy}")
 
-# METADATA ********************
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
 
-# CELL ********************
 
-location_path = f"Files/curated/transactional/{target_table}"
+status = "Failed"
 
-tbl_properties = """
-TBLPROPERTIES (
-    'delta.autoOptimize.optimizeWrite'     = 'true',
-    'delta.autoOptimize.autoCompact'       = 'true',
-    'delta.logRetentionDuration'           = 'interval 30 days',
-    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
-)
-"""
+try:
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
 
-# METADATA ********************
+    for cfg in table_config:
+        source_file = cfg["source_file"]
+        target_table = cfg["target_table"]
+        full_table_name = f"{target_schema}.{target_table}"
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
+        # This must match the LOCATION used when the silver schema notebook created the tables.
+        target_table_path = f"{target_lakehouse_path}/Files/silver/transactional/{target_table}"
+        source_file_path = f"{source_lakehouse_path}/{source_folder_path}/{source_file}"
 
-# CELL ********************
+        logger.info(f"Processing {source_file} -> {full_table_name}")
+        logger.info(f"Source path: {source_file_path}")
+        logger.info(f"Target path: {target_table_path}")
 
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {target_schema}.{target_table} (
-    chronometrics_key                  BIGINT,
-    timecard_id                        STRING,
-    client_number                      STRING,
-    client_key                         STRING,
-    matter_number                      STRING,
-    member_firm_code                   STRING,
-    matter_key                         STRING,
-    group_matter_number                STRING,
-    group_matter_member_firm_code      STRING,
-    group_matter_key                   STRING,
-    matter_company_key                 STRING,
-    matter_billable_type_code          STRING,
-    matter_currency_code               STRING,
-    timekeeper_id                      STRING,
-    timekeeper_member_firm_code        STRING,
-    fe_person_key                      STRING,
-    fe_company_key                     STRING,
-    fe_office_key                      STRING,
-    fe_practice_group_key              STRING,
-    fe_team_key                        STRING,
-    fe_company_tran_key                STRING,
-    fe_office_tran_key                 STRING,
-    fe_practice_group_tran_key         STRING,
-    fe_team_tran_key                   STRING,
-    fe_employee_sub_group_key          STRING,
-    fe_band_level_key                  STRING,
-    timecard_worked_date               STRING,
-    timecard_worked_cal_period         STRING,
-    timecard_post_date                 STRING,
-    timecard_post_cal_period           STRING,
-    confidential_flag                  STRING,
-    pricing_unit                       STRING,
-    hours_worked                       DOUBLE,
-    timecard_narrative                 STRING,
-    worked_standard_rate_dc            DOUBLE,
-    fees_worked_at_standard_dc         DOUBLE,
-    worked_agreed_rate_dc              DOUBLE,
-    fees_worked_at_agreed_dc           DOUBLE,
-    matter_discount_dc                 DOUBLE,
-    wip_hours_write_up_down_value_dc   DOUBLE,
-    fees_worked_at_agreed_net_dc       DOUBLE,
-    fees_billed_at_standard_dc         DOUBLE,
-    fees_billed_at_agreed_dc           DOUBLE,
-    matter_discount_billed_dc          DOUBLE,
-    fees_billed_at_agreed_net_dc       DOUBLE,
-    fees_write_up_down_dc              DOUBLE,
-    hours_write_up_down_value_dc       DOUBLE,
-    worked_fees_billed_net_dc          DOUBLE,
-    bill_num                           STRING,
-    cancel_bill_num                    STRING,
-    bill_type_key                      STRING,
-    bill_date                          STRING,
-    bill_cal_period                    STRING,
-    bill_currency_code                 STRING,
-    hours_billed                       DOUBLE,
-    fees_billed_dc                     DOUBLE,
-    bad_debt_wo_dc                     DOUBLE,
-    final_bill_num                     STRING,
-    final_bill_flag                    STRING,
-    entry_classification_key           STRING,
-    collected_cal_period               STRING,
-    collected_date                     STRING,
-    hours_collected                    DOUBLE,
-    fees_collected_dc                  DOUBLE,
-    phase_set_code                     STRING,
-    phase_set_description              STRING,
-    phase_code                         STRING,
-    phase_description                  STRING,
-    task_code                          STRING,
-    task_description                   STRING,
-    activity_code                      STRING,
-    activity_description               STRING,
-    fixed_fee_activity_code            STRING,
-    fixed_fee_activity_description     STRING,
-    last_updated_date_utc_at_source    TIMESTAMP,
+        # Read source CSV file.
+        df = (
+            spark.read.format("csv")
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .option("delimiter", ",")
+            .load(source_file_path)
+        )
 
---metadata
-    _ingest_date                       DATE,
-    _source_file                       STRING,
-    _source_system                     STRING,
-    _table                             STRING,
-    _lineage_id                        STRING,
-    _effective_start_datetime          TIMESTAMP,
-    _effective_end_datetime            TIMESTAMP,
-    _current_flag                      BOOLEAN,
-    hashed_pk                          STRING
-)
-USING DELTA
-LOCATION '{location_path}'
-{tbl_properties}
-""")
+        # Keep original column names so they match the silver schema you already created.
+        if limit_rows_for_debugging:
+            df = df.limit(1000)
 
-# METADATA ********************
+        df = trim_all_string_columns(df)
+        df = replace_old_dates(df)
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
+        # Remove exact duplicate rows.
+        before_count = df.count()
+        df = remove_exact_duplicates(df)
+        after_count = df.count()
 
-# CELL ********************
+        logger.info(f"{source_file} removed {before_count - after_count} duplicate rows")
 
-df = spark.sql(f"""
-SELECT DISTINCT
-    CAST(-1 AS BIGINT) AS chronometrics_key,
-    CAST(timecard_id AS STRING) AS timecard_id,
-    CAST(client_code AS STRING) AS client_number,
-    CAST(client_code AS STRING) AS client_key,
-    CAST(matter_code AS STRING) AS matter_number,
-    CAST(matter_region_src AS STRING) AS member_firm_code,
-    CAST(matter_code AS STRING) AS matter_key,
-    CAST(group_matter_code AS STRING) AS group_matter_number,
-    CAST(group_matter_region_src AS STRING) AS group_matter_member_firm_code,
-    CAST(group_matter_code AS STRING) AS group_matter_key,
-    CAST(matter_company_code AS STRING) AS matter_company_key,
-    CAST(matter_billable_type_code AS STRING) AS matter_billable_type_code,
-    CAST(matter_currency_code AS STRING) AS matter_currency_code,
-    CAST(timekeeper_id AS STRING) AS timekeeper_id,
-    CAST(fe_region_src_tran AS STRING) AS timekeeper_member_firm_code,
-    CAST(timekeeper_id AS STRING) AS fe_person_key,
-    CAST(fe_company_code AS STRING) AS fe_company_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_office_code AS STRING)), ''), 'Unknown') AS fe_office_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_practice_group_code AS STRING)), ''), 'Unknown') AS fe_practice_group_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_team_code AS STRING)), ''), 'Unknown') AS fe_team_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_company_code_tran AS STRING)), ''), 'Unknown') AS fe_company_tran_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_office_code_tran AS STRING)), ''), 'Unknown') AS fe_office_tran_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_practice_group_code_tran AS STRING)), ''), 'Unknown') AS fe_practice_group_tran_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_group_code AS STRING)), ''), 'Unknown') AS fe_team_tran_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_sub_group_code AS STRING)), ''), 'Unknown') AS fe_employee_sub_group_key,
-    COALESCE(NULLIF(TRIM(CAST(fe_band_level_code AS STRING)), ''), 'Unknown') AS fe_band_level_key,
-    CAST(timecard_worked_date AS STRING) AS timecard_worked_date,
-    CAST(timecard_worked_cal_period AS STRING) AS timecard_worked_cal_period,
-    CAST(timecard_post_date AS STRING) AS timecard_post_date,
-    CAST(timecard_post_cal_period AS STRING) AS timecard_post_cal_period,
-    CAST(confidential_flag AS STRING) AS confidential_flag,
-    CAST(pricing_unit AS STRING) AS pricing_unit,
-    CAST(hours_worked AS DOUBLE) AS hours_worked,
-    COALESCE(NULLIF(TRIM(CAST(timecard_narrative AS STRING)), ''), 'Unknown') AS timecard_narrative,
-    CAST(worked_standard_rate_dc AS DOUBLE) AS worked_standard_rate_dc,
-    CAST(fees_worked_at_standard_dc AS DOUBLE) AS fees_worked_at_standard_dc,
-    CAST(worked_agreed_rate_dc AS DOUBLE) AS worked_agreed_rate_dc,
-    CAST(fees_worked_at_agreed_dc AS DOUBLE) AS fees_worked_at_agreed_dc,
-    CAST(matter_discount_dc AS DOUBLE) AS matter_discount_dc,
-    CAST(wip_hours_write_up_down_value_dc AS DOUBLE) AS wip_hours_write_up_down_value_dc,
-    CAST(fees_worked_at_agreed_net_dc AS DOUBLE) AS fees_worked_at_agreed_net_dc,
-    CAST(fees_billed_at_standard_dc AS DOUBLE) AS fees_billed_at_standard_dc,
-    CAST(fees_billed_at_agreed_dc AS DOUBLE) AS fees_billed_at_agreed_dc,
-    CAST(matter_discount_billed_dc AS DOUBLE) AS matter_discount_billed_dc,
-    CAST(fees_billed_at_agreed_net_dc AS DOUBLE) AS fees_billed_at_agreed_net_dc,
-    CAST(fees_write_up_down_dc AS DOUBLE) AS fees_write_up_down_dc,
-    CAST(hours_write_up_down_value_dc AS DOUBLE) AS hours_write_up_down_value_dc,
-    CAST(worked_fees_billed_net_dc AS DOUBLE) AS worked_fees_billed_net_dc,
-    CAST(bill_num AS STRING) AS bill_num,
-    COALESCE(NULLIF(TRIM(CAST(cancel_bill_num AS STRING)), ''), 'Unknown') AS cancel_bill_num,
-    COALESCE(NULLIF(TRIM(CAST(bill_type AS STRING)), ''), 'Unknown') AS bill_type_key,
-    CAST(bill_date AS STRING) AS bill_date,
-    CAST(bill_cal_period AS STRING) AS bill_cal_period,
-    COALESCE(NULLIF(TRIM(CAST(bill_currency_code AS STRING)), ''), 'Unknown') AS bill_currency_code,
-    CAST(hours_billed AS DOUBLE) AS hours_billed,
-    CAST(fees_billed_dc AS DOUBLE) AS fees_billed_dc,
-    CAST(bad_debt_wo_dc AS DOUBLE) AS bad_debt_wo_dc,
-    CAST(final_bill_num AS STRING) AS final_bill_num,
-    CAST(final_bill_flag AS STRING) AS final_bill_flag,
-    CAST(material_group AS STRING) AS entry_classification_key,
-    CAST(collected_cal_period AS STRING) AS collected_cal_period,
-    CAST(collected_date AS STRING) AS collected_date,
-    CAST(hours_collected AS DOUBLE) AS hours_collected,
-    CAST(fees_collected_dc AS DOUBLE) AS fees_collected_dc,
-    COALESCE(NULLIF(TRIM(CAST(phase_set_code AS STRING)), ''), 'Unknown') AS phase_set_code,
-    COALESCE(NULLIF(TRIM(CAST(phase_set_desc AS STRING)), ''), 'Unknown') AS phase_set_description,
-    COALESCE(NULLIF(TRIM(CAST(phase_code AS STRING)), ''), 'Unknown') AS phase_code,
-    COALESCE(NULLIF(TRIM(CAST(phase_desc AS STRING)), ''), 'Unknown') AS phase_description,
-    COALESCE(NULLIF(TRIM(CAST(task_code AS STRING)), ''), 'Unknown') AS task_code,
-    COALESCE(NULLIF(TRIM(CAST(task_desc AS STRING)), ''), 'Unknown') AS task_description,
-    COALESCE(NULLIF(TRIM(CAST(activity_code AS STRING)), ''), 'Unknown') AS activity_code,
-    COALESCE(NULLIF(TRIM(CAST(activity_desc AS STRING)), ''), 'Unknown') AS activity_description,
-    COALESCE(NULLIF(TRIM(CAST(fixed_fee_activity_code AS STRING)), ''), 'Unknown') AS fixed_fee_activity_code,
-    COALESCE(NULLIF(TRIM(CAST(fixed_fee_activity_desc AS STRING)), ''), 'Unknown') AS fixed_fee_activity_description,
-    TO_TIMESTAMP(lastupdatedt, 'dd/MM/yyyy') AS last_updated_date_utc_at_source,
+        # Stamp framework metadata columns.
+        df = add_metadata(
+            df=df,
+            ingest_date=str(date.today()),
+            file_path=source_file_path,
+            source_system=source_system,
+            table_name=target_table,
+            lineage_id=lineage_id
+        )
 
---metadata
-    CAST(_ingest_date AS DATE) AS _ingest_date,
-    CAST(_source_file AS STRING) AS _source_file,
-    CAST(_source_system AS STRING) AS _source_system,
-    '{target_table}' AS _table,
-    CAST('{effective_lineage_id}' AS STRING) AS _lineage_id,
-    CURRENT_TIMESTAMP() AS _effective_start_datetime,
-    TO_TIMESTAMP('9999-12-31 23:59:59') AS _effective_end_datetime,
-    TRUE AS _current_flag,
+        # Validate dataframe schema against the precreated target table schema.
+        target_df = spark.table(full_table_name)
 
---hashkey
-    md5(concat_ws('|',
-        coalesce(cast(timecard_id as string), ''),
-        coalesce(cast(client_code as string), ''),
-        coalesce(cast(matter_code as string), ''),
-        coalesce(cast(matter_region_src as string), ''),
-        coalesce(cast(group_matter_code as string), ''),
-        coalesce(cast(group_matter_region_src as string), ''),
-        coalesce(cast(timekeeper_id as string), ''),
-        coalesce(cast(timecard_worked_date as string), ''),
-        coalesce(cast(timecard_post_date as string), ''),
-        coalesce(cast(bill_num as string), ''),
-        coalesce(cast(final_bill_num as string), ''),
-        coalesce(cast(hours_worked as string), ''),
-        coalesce(cast(collected_date as string), ''),
-        coalesce(cast(phase_code as string), ''),
-        coalesce(cast(phase_desc as string), ''),
-        coalesce(cast(task_code as string), ''),
-        coalesce(cast(task_desc as string), '')
-    )) AS hashed_pk
-FROM {source_schema}.{source_table}
-""")
+        source_schema = {field.name: field.dataType.simpleString() for field in df.schema.fields}
+        target_schema_map = {field.name: field.dataType.simpleString() for field in target_df.schema.fields}
 
-display(df)
+        source_cols = set(source_schema.keys())
+        target_cols = set(target_schema_map.keys())
 
-# METADATA ********************
+        missing_in_source = sorted(target_cols - source_cols)
+        extra_in_source = sorted(source_cols - target_cols)
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
+        type_mismatches = sorted(
+            [
+                f"{col}: source={source_schema[col]} target={target_schema_map[col]}"
+                for col in (source_cols & target_cols)
+                if source_schema[col] != target_schema_map[col]
+            ]
+        )
 
-# CELL ********************
+        if missing_in_source or extra_in_source or type_mismatches:
+            error_parts = []
+            if missing_in_source:
+                error_parts.append(f"Missing in source: {missing_in_source}")
+            if extra_in_source:
+                error_parts.append(f"Extra in source: {extra_in_source}")
+            if type_mismatches:
+                error_parts.append(f"Type mismatches: {type_mismatches}")
 
-validate_duplicates(df, "hashed_pk", 10)
+            raise ValueError(
+                f"Schema validation failed for {full_table_name}. " + " | ".join(error_parts)
+            )
 
-# METADATA ********************
+        # Reorder columns to match the target table exactly.
+        df = df.select(*target_df.columns)
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
+        logger.info(f"Schema validation passed for {full_table_name}")
 
-# CELL ********************
+        # Commented out for validation/debugging only.
+        # load_to_target(df, target_table_path, target_load_strategy)
 
-load_to_target(df, location_path, "merge")
+        logger.info(f"Prepared {source_file} for {full_table_name}")
 
-# METADATA ********************
+    status = "Completed"
 
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# CELL ********************
-
-df = spark.sql(f"""
-SELECT COUNT(*) FROM {target_schema}.{target_table}
-""")
-display(df)
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
+except Exception:
+    logger.exception("Processing error.")
+    status = "Failed"
+    raise
