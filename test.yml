@@ -15,7 +15,7 @@ limit_rows_for_debugging = False
 # Manual fallback for source settings.
 source_settings = json.dumps({
     "lakehouse_name": "lh_canada_global_mds",
-    "folder_path": "Files/silver/silver_transactional_csv",
+    "folder_path": "Files/silver/transactional/silver_transactional_csv",
     "source_system": "lh_canada_global_mds",
     "table_config": [
         {"source_file": "EFI.csv", "target_table": "silver_transactional_efi"},
@@ -32,48 +32,6 @@ target_settings = json.dumps({
 })
 
 
-
-
-%run nb_transactional_shared_functions
-
-
-
-# Standard framework logging setup.
-setup_logging()
-logger = logging.getLogger("LoadTransactionalToSilver")
-logger.setLevel(logging.INFO)
-
-
-
-
-# Accept either JSON strings (framework) or already-parsed dicts (manual/debug).
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
-
-# Source configuration
-source_lakehouse_name = source_settings.get("lakehouse_name")
-source_folder_path = source_settings.get("folder_path")
-source_system = source_settings.get("source_system", source_lakehouse_name)
-table_config = source_settings.get("table_config", [])
-
-# Target configuration
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema = target_settings.get("schema_name")
-target_load_strategy = target_settings.get("load_strategy", "overwrite")
-
-# Resolve lakehouse storage paths by name.
-source_lakehouse_path = notebookutils.lakehouse.get(source_lakehouse_name).properties["abfsPath"]
-target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
-
-logger.info(f"Source lakehouse: {source_lakehouse_name}")
-logger.info(f"Target lakehouse: {target_lakehouse_name}")
-logger.info(f"Target schema: {target_schema}")
-logger.info(f"Load strategy: {target_load_strategy}")
-
-
-
-
 status = "Failed"
 
 try:
@@ -84,9 +42,9 @@ try:
         target_table = cfg["target_table"]
         full_table_name = f"{target_schema}.{target_table}"
 
-        # This must match the LOCATION used when the silver schema notebook created the tables.
-        target_table_path = f"{target_lakehouse_path}/Files/silver/transactional/{target_table}"
-        source_file_path = f"{source_lakehouse_path}/{source_folder_path}/{source_file}"
+        # Use relative OneLake paths since the lakehouse is already attached in the notebook.
+        source_file_path = f"{source_folder_path}/{source_file}"
+        target_table_path = f"Files/silver/transactional/{target_table}"
 
         logger.info(f"Processing {source_file} -> {full_table_name}")
         logger.info(f"Source path: {source_file_path}")
@@ -128,10 +86,10 @@ try:
         # Validate dataframe schema against the precreated target table schema.
         target_df = spark.table(full_table_name)
 
-        source_schema = {field.name: field.dataType.simpleString() for field in df.schema.fields}
+        source_schema_map = {field.name: field.dataType.simpleString() for field in df.schema.fields}
         target_schema_map = {field.name: field.dataType.simpleString() for field in target_df.schema.fields}
 
-        source_cols = set(source_schema.keys())
+        source_cols = set(source_schema_map.keys())
         target_cols = set(target_schema_map.keys())
 
         missing_in_source = sorted(target_cols - source_cols)
@@ -139,9 +97,9 @@ try:
 
         type_mismatches = sorted(
             [
-                f"{col}: source={source_schema[col]} target={target_schema_map[col]}"
+                f"{col}: source={source_schema_map[col]} target={target_schema_map[col]}"
                 for col in (source_cols & target_cols)
-                if source_schema[col] != target_schema_map[col]
+                if source_schema_map[col] != target_schema_map[col]
             ]
         )
 
@@ -163,10 +121,10 @@ try:
 
         logger.info(f"Schema validation passed for {full_table_name}")
 
-        # Commented out for validation/debugging only.
-        # load_to_target(df, target_table_path, target_load_strategy)
+        # Comment out this line if you only want to validate and not write.
+        load_to_target(df, target_table_path, target_load_strategy)
 
-        logger.info(f"Prepared {source_file} for {full_table_name}")
+        logger.info(f"Loaded {source_file} into {full_table_name}")
 
     status = "Completed"
 
