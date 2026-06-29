@@ -1,70 +1,7 @@
-# Process each source table from the table config
+# Check for duplicate hashed keys before merge
 for cfg in table_config:
-
-    # Table-level configuration
-    source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
-    target_table = cfg.get("target_table")
-    primary_keys = cfg.get("primary_keys", [])
-    column_list = cfg.get("select_columns", [])
-    is_incremental = cfg.get("is_incremental", 0)
-    watermark_col = cfg.get("incremental_column")
-
-    # Reusable names for this table
-    full_source_name = f"{source_schema}.{source_table}"
-    column_list_sql = ", ".join(column_list)
-    source_view = f"src_{source_table.lower()}"
     target_view = f"tgt_{source_table.lower()}"
 
-    # Incremental filter; keep full load behavior for now
-    watermark_filter = "1 = 1"
-    if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
-        watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
-
-    # Read only the requested columns from SQL
-    source_query = f"""
-    (
-        SELECT {column_list_sql}
-        FROM {full_source_name}
-        WHERE {watermark_filter}
-    ) AS src
-    """
-
-    df_source = spark.read.jdbc(
-        url=jdbc_url,
-        table=source_query,
-        properties=connection_properties
-    )
-
-    # Clean source data first
-    df_source_clean = clean_bronze_table(df_source, limit_rows_for_debugging=False)
-    df_source_clean = remove_exact_duplicates(df_source_clean)
-
-    # Create the source temp view from the cleaned data
-    df_source_clean.createOrReplaceTempView(source_view)
-
-    # Preview the cleaned version
-    print(f"Cleaned preview for {full_source_name}")
-    display(df_source_clean.limit(3))
-
-    # Build the hashed key from the configured primary keys
-    pk_expr = ", ".join([f"CAST({to_snake_case(col)} AS STRING)" for col in primary_keys])
-
-    # Create the final temp view that is ready to merge into silver
-    spark.sql(f"""
-    CREATE OR REPLACE TEMP VIEW {target_view} AS
-    SELECT
-        *,
-        CURRENT_TIMESTAMP() AS _ingest_time,
-        CURRENT_DATE() AS _ingest_date,
-        '{full_source_name}' AS _source_file,
-        '{source_name}' AS _source_system,
-        '{target_table}' AS _table,
-        '{lineage_id}' AS _lineage_id,
-        sha2(concat_ws('||', {pk_expr}), 256) AS _hashed_pk
-    FROM {source_view}
-    """)
-
-    # Preview the final shaped dataset
-    print(f"Final preview for {full_source_name}")
-    display(spark.table(target_view).limit(3))
+    print(f"Checking duplicates for {target_view}")
+    validate_duplicates(spark.table(target_view), "_hashed_pk", 10)
