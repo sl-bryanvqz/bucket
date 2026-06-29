@@ -1,18 +1,22 @@
 import json
 import uuid
 
+# Basic notebook runtime values
 task_id = 50
 task_name = "Load SQL to silver"
 task_executions_id = ""
 parent_run_id = ""
 lineage_id = str(uuid.uuid4())
 
+# Keep debug and watermark values simple for now
 limit_rows_for_debugging = False
 prev_wm = None
 curr_wm = None
 
+# Framework-style placeholder; real connection settings should come from pipeline/metadata
 source_connection_settings = "{}"
 
+# Source config: one database, many tables to load
 source_settings = json.dumps({
     "source_name": "CAN_RMDD",
     "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
@@ -43,6 +47,7 @@ source_settings = json.dumps({
                 "LastUpdatedDateGMT",
                 "LastUpdatedBy"
             ],
+            # 0 = full load, 1 = incremental load
             "is_incremental": 0,
             "incremental_column": "LastUpdatedDateGMT"
         },
@@ -95,12 +100,14 @@ source_settings = json.dumps({
                 "ConflictSearchID",
                 "SanctionsDetail"
             ],
+            # Keep full load for the first test
             "is_incremental": 0,
             "incremental_column": "LastUpdatedDateGMT"
         }
     ]
 })
 
+# Target config: common silver destination settings
 target_settings = json.dumps({
     "lakehouse_name": "lh_canada_global_mds",
     "schema_name": "silver_rmdd",
