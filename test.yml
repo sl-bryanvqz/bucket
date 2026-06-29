@@ -1,89 +1,73 @@
-# Apply optional table-specific transformations
-# Metadata and _hashed_pk should already exist in silver_view
+# Apply optional table-specific transformations on the existing tgt_* temp views
 for cfg in table_config:
-
-    source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
-
-    full_source_name = f"{source_schema}.{source_table}"
-    silver_view = f"silver_{source_table.lower()}"
     target_view = f"tgt_{source_table.lower()}"
 
-    # Address-specific transformation
+    # Start from the existing temp view that already has metadata + _hashed_pk
+    df_target = spark.table(target_view)
+
     if source_table == "Address":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT
-            CAST(NULL AS BIGINT) AS address_key,
-            address_id,
-            address_type_code,
-            address_1,
-            address_2,
-            address_3,
-            address_4,
-            address_5,
-            city,
-            country_id,
-            CAST(NULL AS STRING) AS country_code_iso2,
-            state,
-            postal_code AS zip_code,
-            CAST(NULL AS STRING) AS street_address_check,
-            active AS is_active,
-            last_updated_date_gmt AS last_updated_date_utc_at_source,
-            _ingest_time,
-            _ingest_date,
-            _source_file,
-            _source_system,
-            _table,
-            _lineage_id,
-            _hashed_pk
-        FROM {silver_view}
-        """)
+        df_target = df_target.selectExpr(
+            "CAST(NULL AS BIGINT) AS address_key",
+            "address_id",
+            "address_type_code",
+            "address_1",
+            "address_2",
+            "address_3",
+            "address_4",
+            "address_5",
+            "city",
+            "country_id",
+            "CAST(NULL AS STRING) AS country_code_iso2",
+            "state",
+            "postal_code AS zip_code",
+            "CAST(NULL AS STRING) AS street_address_check",
+            "active AS is_active",
+            "last_updated_date_gmt AS last_updated_date_utc_at_source",
+            "_ingest_time",
+            "_ingest_date",
+            "_source_file",
+            "_source_system",
+            "_table",
+            "_lineage_id",
+            "_hashed_pk"
+        )
 
-    # Client-specific transformation
     elif source_table == "Client":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT
-            CAST(NULL AS BIGINT) AS client_key,
-            client_number,
-            member_firm_code,
-            client_id,
-            pms_client_id,
-            client_name,
-            alternate_client_name,
-            contact_name,
-            open_date_gmt AS open_date_utc,
-            close_date_gmt AS close_date_utc,
-            client_duns,
-            client_gduns AS client_guduns,
-            comments,
-            pms_entity_type,
-            client_type,
-            is_confidential,
-            siccode AS sic_code,
-            CAST(NULL AS STRING) AS client_sector_key,
-            CAST(NULL AS BOOLEAN) AS is_sanctions_checked,
-            active AS is_active,
-            created_date_gmt AS created_date_utc_at_source,
-            last_updated_date_gmt AS last_updated_date_utc_at_source,
-            _ingest_time,
-            _ingest_date,
-            _source_file,
-            _source_system,
-            _table,
-            _lineage_id,
-            _hashed_pk
-        FROM {silver_view}
-        """)
+        df_target = df_target.selectExpr(
+            "CAST(NULL AS BIGINT) AS client_key",
+            "client_number",
+            "member_firm_code",
+            "client_id",
+            "pms_client_id",
+            "client_name",
+            "alternate_client_name",
+            "contact_name",
+            "open_date_gmt AS open_date_utc",
+            "close_date_gmt AS close_date_utc",
+            "client_duns",
+            "client_gduns AS client_guduns",
+            "comments",
+            "pms_entity_type",
+            "client_type",
+            "is_confidential",
+            "siccode AS sic_code",
+            "CAST(NULL AS STRING) AS client_sector_key",
+            "CAST(NULL AS BOOLEAN) AS is_sanctions_checked",
+            "active AS is_active",
+            "created_date_gmt AS created_date_utc_at_source",
+            "last_updated_date_gmt AS last_updated_date_utc_at_source",
+            "_ingest_time",
+            "_ingest_date",
+            "_source_file",
+            "_source_system",
+            "_table",
+            "_lineage_id",
+            "_hashed_pk"
+        )
 
-    # Default: no transformation needed, just pass through
-    else:
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT *
-        FROM {silver_view}
-        """)
+    # If no transformation is needed, keep the view as-is
+    df_target.createOrReplaceTempView(target_view)
 
-    print(f"Transformed preview for {full_source_name}")
-    display(spark.table(target_view).limit(3))
+    print(f"Transformed preview for {target_view}")
+    display(df_target.limit(3))
