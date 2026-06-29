@@ -1,32 +1,7 @@
-# Add metadata and hashed key to the transformed tgt_* views
+# Check for duplicate hashed keys before merge
 for cfg in table_config:
-    source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
-    target_table = cfg.get("target_table")
-    primary_keys = cfg.get("primary_keys", [])
-
-    full_source_name = f"{source_schema}.{source_table}"
     target_view = f"tgt_{source_table.lower()}"
 
-    df_target = spark.table(target_view)
-
-    df_target = add_metadata(
-        df=df_target,
-        ingest_date=str(date.today()),
-        file_path=full_source_name,
-        schema_name=source_name,
-        table_name=target_table,
-        lineage_id=lineage_id
-    )
-
-    pk_expr_cols = [to_snake_case(col) for col in primary_keys]
-
-    df_target = df_target.withColumn(
-        "_hashed_pk",
-        F.md5(F.concat_ws("|", *[F.col(col).cast("string") for col in pk_expr_cols]))
-    )
-
-    df_target.createOrReplaceTempView(target_view)
-
-    print(f"Final preview for {full_source_name}")
-    display(df_target.limit(3))
+    print(f"Checking duplicates for {source_table}")
+    validate_duplicates(spark.table(target_view), "_hashed_pk", 10)
