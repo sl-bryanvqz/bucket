@@ -36,16 +36,11 @@ for cfg in table_config:
         properties=connection_properties
     )
 
-    # Create the raw source temp view for later SQL steps
-    df_source.createOrReplaceTempView(source_view)
-
-    # Quick preview for this table
-    print(f"Preview for {full_source_name}")
-    display(df_source.limit(3))
-
-    # Clean the source data and rebuild the temp view
+    # Clean source data first
     df_source_clean = clean_bronze_table(df_source, limit_rows_for_debugging=False)
     df_source_clean = remove_exact_duplicates(df_source_clean)
+
+    # Create the source temp view from the cleaned data
     df_source_clean.createOrReplaceTempView(source_view)
 
     # Preview the cleaned version
