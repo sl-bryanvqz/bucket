@@ -1,18 +1,2 @@
-# Build one JDBC connection for the source SQL database
 if not server_name:
-    raise ValueError("source_connection_settings must include server_name, jdbc_hostname, or server")
-
-jdbc_url = (
-    "jdbc:sqlserver://"
-    f"{server_name}:1433;"
-    f"database={source_database};"
-    "encrypt=true;"
-)
-
-connection_properties = {
-    "accessToken": mssparkutils.credentials.getToken("https://database.windows.net/"),
-    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-}
-
-print(jdbc_url)
-print(connection_properties)
+    server_name = "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com"
