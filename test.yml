@@ -1,3 +1,5 @@
+# Framework-style parameters
+import json
 import uuid
 
 task_id = 50
@@ -10,12 +12,15 @@ previous_watermark_datetime = None
 current_watermark_datetime = None
 limit_rows_for_debugging = False
 
+source_connection_settings = "{}"
+
+# Keep Mary's runtime settings pattern, but now for multiple tables
 table_configs = [
     {
         "source_name": "CAN_RMDD",
         "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
-        "source_schema": "dbo",
-        "source_table": "Address",
+        "schema_name": "dbo",
+        "table_name": "Address",
         "select_columns": [
             "AddressID",
             "EntityID",
@@ -40,16 +45,16 @@ table_configs = [
         "is_incremental": 0,
         "incremental_column": "LastUpdatedDateGMT",
         "target_lakehouse_name": "lh_canada_global_mds",
-        "target_schema": "sqldb_can_rmdd",
-        "target_table": "dbo__address",
+        "target_schema": "silver_rmdd",
+        "target_table": "silver_rmdd_address",
         "load_strategy": "overwrite",
         "primary_keys": ["AddressID"]
     },
     {
         "source_name": "CAN_RMDD",
         "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
-        "source_schema": "dbo",
-        "source_table": "BillingType",
+        "schema_name": "dbo",
+        "table_name": "BillingType",
         "select_columns": [
             "BillingTypeID",
             "BillingType",
@@ -59,8 +64,8 @@ table_configs = [
         "is_incremental": 0,
         "incremental_column": "LastUpdatedDateGMT",
         "target_lakehouse_name": "lh_canada_global_mds",
-        "target_schema": "sqldb_can_rmdd",
-        "target_table": "dbo__billing_type",
+        "target_schema": "silver_rmdd",
+        "target_table": "silver_rmdd_billing_type",
         "load_strategy": "overwrite",
         "primary_keys": ["BillingTypeID"]
     }
@@ -68,11 +73,7 @@ table_configs = [
 
 
 
-
-
 %run nb_transactional_shared_functions
-
-
 
 
 
@@ -88,7 +89,7 @@ logger.setLevel(logging.INFO)
 
 
 
-
+# Exact JDBC token connection style already used in workspace
 jdbc_url = (
     "jdbc:sqlserver://"
     "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com:1433;"
@@ -106,24 +107,24 @@ print(connection_properties)
 
 
 
-
-# Smoke test both tables exist
+# Quick smoke test for both source tables
 for cfg in table_configs:
-    table_name = f"{cfg['source_schema']}.{cfg['source_table']}"
-    print(f"Testing {table_name}")
-    
+    full_source_name = f"{cfg['schema_name']}.{cfg['table_name']}"
+    print(f"Testing source table: {full_source_name}")
+
     df_test = spark.read.jdbc(
         url=jdbc_url,
-        table=table_name,
+        table=full_source_name,
         properties=connection_properties
     )
-    
-    print(table_name, df_test.count())
+
+    print(f"{full_source_name}: {df_test.count()} rows")
     display(df_test.limit(3))
 
 
 
 
+# Tiny helper just for PK name normalization against clean_bronze_table output
 def to_snake_case_local(string):
     string = re.sub(r"([a-z])([A-Z0-9])", r"\1_\2", string)
     string = re.sub(r"([A-Z])([A-Z][a-z])", r"\1_\2", string)
@@ -131,27 +132,38 @@ def to_snake_case_local(string):
 
 
 
-
 results = []
 
-
-
 for cfg in table_configs:
-    logger.info(f"Starting {cfg['source_table']} -> {cfg['target_schema']}.{cfg['target_table']}")
+    source_name = cfg["source_name"]
+    source_database = cfg["database_name"]
+    source_schema_name = cfg["schema_name"]
+    source_table_name = cfg["table_name"]
+    select_columns = cfg["select_columns"]
+    is_incremental = cfg["is_incremental"]
+    incremental_column = cfg["incremental_column"]
 
-    column_sql = ", ".join(cfg["select_columns"]) if cfg["select_columns"] else "*"
-    full_source_name = f"{cfg['source_schema']}.{cfg['source_table']}"
+    target_lakehouse_name = cfg["target_lakehouse_name"]
+    target_schema_name = cfg["target_schema"]
+    target_table_name = cfg["target_table"]
+    target_load_strategy = cfg["load_strategy"]
+    target_primary_keys = cfg["primary_keys"]
+
+    logger.info(f"Starting {source_schema_name}.{source_table_name} -> {target_schema_name}.{target_table_name}")
+
+    column_sql = ", ".join(select_columns) if select_columns else "*"
+    full_source_name = f"{source_schema_name}.{source_table_name}"
 
     watermark_filter = ""
     if (
-        cfg.get("is_incremental") == 1
+        is_incremental == 1
         and previous_watermark_datetime
         and current_watermark_datetime
-        and cfg.get("incremental_column")
+        and incremental_column
     ):
         watermark_filter = f"""
-        WHERE {cfg['incremental_column']} > '{previous_watermark_datetime}'
-          AND {cfg['incremental_column']} <= '{current_watermark_datetime}'
+        WHERE {incremental_column} > '{previous_watermark_datetime}'
+          AND {incremental_column} <= '{current_watermark_datetime}'
         """
 
     source_query = f"""
@@ -173,13 +185,15 @@ for cfg in table_configs:
     if limit_rows_for_debugging:
         df_source = df_source.limit(1000)
 
-    temp_view_name = f"vw_{cfg['source_table'].lower()}"
+    temp_view_name = f"vw_{source_table_name.lower()}"
     df_source.createOrReplaceTempView(temp_view_name)
 
     logger.info(f"Created temp view {temp_view_name}")
 
+    # Keep Mary's temp-view logic
     df_sql = spark.sql(f"SELECT * FROM {temp_view_name}")
 
+    # Reuse workspace shared functions
     df_clean = clean_bronze_table(df_sql, limit_rows_for_debugging)
     df_clean = remove_exact_duplicates(df_clean)
 
@@ -187,25 +201,27 @@ for cfg in table_configs:
         df_clean,
         str(date.today()),
         full_source_name,
-        cfg["source_name"],
-        cfg["target_table"],
+        source_name,
+        target_table_name,
         lineage_id
     )
 
-    primary_keys_snake = [to_snake_case_local(c) for c in cfg["primary_keys"]]
+    primary_keys_snake = [to_snake_case_local(c) for c in target_primary_keys]
 
     df_clean = df_clean.withColumn(
-        "hashed_pk",
+        "_hashed_pk",
         F.sha2(F.concat_ws("||", *[F.col(c).cast("string") for c in primary_keys_snake]), 256)
     )
 
-    target_lakehouse_path = notebookutils.lakehouse.get(cfg["target_lakehouse_name"]).properties["abfsPath"]
-    target_table_path = f"{target_lakehouse_path}/Tables/{cfg['target_schema']}/{cfg['target_table']}"
-    full_target_name = f"{cfg['target_schema']}.{cfg['target_table']}"
+    target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
+    target_table_path = f"{target_lakehouse_path}/Tables/{target_schema_name}/{target_table_name}"
+    full_target_name = f"{target_schema_name}.{target_table_name}"
 
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {cfg['target_schema']}")
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema_name}")
 
-    load_to_target(df_clean, target_table_path, cfg["load_strategy"])
+    logger.info(f"Target path: {target_table_path}")
+
+    load_to_target(df_clean, target_table_path, target_load_strategy)
 
     spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {full_target_name}
@@ -225,11 +241,11 @@ for cfg in table_configs:
 
 
 
-    print(results)
+print(results)
 
 
 
-    for result in results:
+for result in results:
     print(result["target_table"])
     df_target = spark.table(result["target_table"])
     print(df_target.count())
@@ -237,7 +253,7 @@ for cfg in table_configs:
 
 
 
-    final_result = {
+final_result = {
     "status": "SUCCESS",
     "tables_processed": len(results),
     "details": results,
