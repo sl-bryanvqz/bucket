@@ -18,6 +18,7 @@ df_source = spark.read.jdbc(
 
 df_source.createOrReplaceTempView(source_view)
 
-display(df_source.limit(5))
+print(f"Preview for {full_source_name}")
+display(df_source.limit(3))
 print(df_source.count())
 print(df_source.columns)
