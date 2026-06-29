@@ -1,6 +1,27 @@
-import logging
-from notebookutils import mssparkutils
+# Accept either JSON strings (framework) or already-parsed dicts (manual/debug).
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
+source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
 
-setup_logging()
-logger = logging.getLogger("LoadSqlToSilver")
-logger.setLevel(logging.INFO)
+# Source configuration
+source_name = source_settings.get("source_name")
+source_database = source_settings.get("database_name")
+table_config = source_settings.get("table_config", [])
+
+# Target configuration
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema = target_settings.get("schema_name")
+target_load_strategy = target_settings.get("load_strategy", "merge")
+location_root = target_settings.get("location_root")
+
+# SQL connection configuration
+server_name = (
+    source_connection_settings.get("server_name")
+    or source_connection_settings.get("jdbc_hostname")
+    or source_connection_settings.get("server")
+)
+
+print(source_name)
+print(source_database)
+print(target_schema)
+display(table_config)
