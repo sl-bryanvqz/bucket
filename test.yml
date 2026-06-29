@@ -1,24 +1,41 @@
-watermark_filter = "1 = 1"
-if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
-    watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
+# Process each source table from the table config
+for cfg in table_config:
 
-source_query = f"""
-(
-    SELECT {column_list_sql}
-    FROM {full_source_name}
-    WHERE {watermark_filter}
-) AS src
-"""
+    # Table-level configuration
+    source_schema = cfg.get("schema_name")
+    source_table = cfg.get("table_name")
+    column_list = cfg.get("select_columns", [])
+    is_incremental = cfg.get("is_incremental", 0)
+    watermark_col = cfg.get("incremental_column")
 
-df_source = spark.read.jdbc(
-    url=jdbc_url,
-    table=source_query,
-    properties=connection_properties
-)
+    # Reusable names for this table
+    full_source_name = f"{source_schema}.{source_table}"
+    column_list_sql = ", ".join(column_list)
+    source_view = f"src_{source_table.lower()}"
 
-df_source.createOrReplaceTempView(source_view)
+    # Incremental filter; keep full load behavior for now
+    watermark_filter = "1 = 1"
+    if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
+        watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
 
-print(f"Preview for {full_source_name}")
-display(df_source.limit(3))
-print(df_source.count())
-print(df_source.columns)
+    # Read only the requested columns from SQL
+    source_query = f"""
+    (
+        SELECT {column_list_sql}
+        FROM {full_source_name}
+        WHERE {watermark_filter}
+    ) AS src
+    """
+
+    df_source = spark.read.jdbc(
+        url=jdbc_url,
+        table=source_query,
+        properties=connection_properties
+    )
+
+    # Create the raw source temp view for later SQL steps
+    df_source.createOrReplaceTempView(source_view)
+
+    # Quick preview for this table
+    print(f"Preview for {full_source_name}")
+    display(df_source.limit(3))
