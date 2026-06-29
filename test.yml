@@ -1,9 +1,7 @@
-# Framework-style parameters with safe manual defaults for one-table testing.
-import json
 import uuid
 
 task_id = 50
-task_name = "Load SQL to silver - Address"
+task_name = "Load SQL to silver - multi-table test"
 task_executions_id = ""
 parent_run_id = ""
 lineage_id = str(uuid.uuid4())
@@ -12,39 +10,68 @@ previous_watermark_datetime = None
 current_watermark_datetime = None
 limit_rows_for_debugging = False
 
-source_connection_settings = "{}"
+table_configs = [
+    {
+        "source_name": "CAN_RMDD",
+        "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+        "source_schema": "dbo",
+        "source_table": "Address",
+        "select_columns": [
+            "AddressID",
+            "EntityID",
+            "EntityTypeCode",
+            "AddressTypeCode",
+            "Address1",
+            "Address2",
+            "Address3",
+            "Address4",
+            "Address5",
+            "Address6",
+            "City",
+            "Country",
+            "CountryID",
+            "State",
+            "PostalCode",
+            "SourceSystemID",
+            "Active",
+            "LastUpdatedDateGMT",
+            "LastUpdatedBy"
+        ],
+        "is_incremental": 0,
+        "incremental_column": "LastUpdatedDateGMT",
+        "target_lakehouse_name": "lh_canada_global_mds",
+        "target_schema": "sqldb_can_rmdd",
+        "target_table": "dbo__address",
+        "load_strategy": "overwrite",
+        "primary_keys": ["AddressID"]
+    },
+    {
+        "source_name": "CAN_RMDD",
+        "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+        "source_schema": "dbo",
+        "source_table": "BillingType",
+        "select_columns": [
+            "BillingTypeID",
+            "BillingType",
+            "Active",
+            "LastUpdatedDateGMT"
+        ],
+        "is_incremental": 0,
+        "incremental_column": "LastUpdatedDateGMT",
+        "target_lakehouse_name": "lh_canada_global_mds",
+        "target_schema": "sqldb_can_rmdd",
+        "target_table": "dbo__billing_type",
+        "load_strategy": "overwrite",
+        "primary_keys": ["BillingTypeID"]
+    }
+]
 
-source_settings = json.dumps({
-    "source_name": "CAN_RMDD",
-    "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
-    "schema_name": "dbo",
-    "table_name": "Address",
-    "select_columns": [
-        "AddressID",
-        "AddressLine1",
-        "AddressLine2",
-        "City",
-        "StateProvince",
-        "CountryRegion",
-        "PostalCode",
-        "LastUpdatedDateGMT"
-    ],
-    "is_incremental": 0,
-    "incremental_column": "LastUpdatedDateGMT"
-})
-
-target_settings = json.dumps({
-    "lakehouse_name": "lh_canada_global_mds",
-    "schema_name": "sqldb_adventureworks",
-    "table_name": "sales_lt__address",
-    "load_strategy": "overwrite",
-    "primary_keys": ["AddressID"]
-})
 
 
 
 
 %run nb_transactional_shared_functions
+
 
 
 
@@ -62,36 +89,10 @@ logger.setLevel(logging.INFO)
 
 
 
-# Parse runtime settings
-source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-
-source_name = source_settings.get("source_name")
-source_database = source_settings.get("database_name")
-source_schema_name = source_settings.get("schema_name")
-source_table_name = source_settings.get("table_name")
-select_columns = source_settings.get("select_columns", [])
-is_incremental = source_settings.get("is_incremental", 0)
-incremental_column = source_settings.get("incremental_column")
-
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema_name = target_settings.get("schema_name")
-target_table_name = target_settings.get("table_name")
-target_load_strategy = target_settings.get("load_strategy", "overwrite")
-target_primary_keys = target_settings.get("primary_keys", [])
-
-logger.info(source_settings)
-logger.info(target_settings)
-
-
-
-
-# Exact JDBC token connection style already used in the workspace snapshot
 jdbc_url = (
     "jdbc:sqlserver://"
     "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com:1433;"
-    f"database={source_database};"
+    "database=CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e;"
     "encrypt=true;"
 )
 
@@ -105,119 +106,142 @@ print(connection_properties)
 
 
 
-# Smoke test the source connection
-df_test = spark.read.jdbc(
-    url=jdbc_url,
-    table=f"{source_schema_name}.{source_table_name}",
-    properties=connection_properties
-)
 
-print(df_test.count())
-display(df_test.limit(5))
-
-
-
-
-# Build source query
-column_sql = ", ".join(select_columns) if select_columns else "*"
-full_source_name = f"{source_schema_name}.{source_table_name}"
-
-watermark_filter = ""
-
-if is_incremental == 1 and previous_watermark_datetime and current_watermark_datetime and incremental_column:
-    watermark_filter = f"""
-    WHERE {incremental_column} > '{previous_watermark_datetime}'
-      AND {incremental_column} <= '{current_watermark_datetime}'
-    """
-
-source_query = f"""
-(
-    SELECT {column_sql}
-    FROM {full_source_name}
-    {watermark_filter}
-) AS src
-"""
-
-print(source_query)
+# Smoke test both tables exist
+for cfg in table_configs:
+    table_name = f"{cfg['source_schema']}.{cfg['source_table']}"
+    print(f"Testing {table_name}")
+    
+    df_test = spark.read.jdbc(
+        url=jdbc_url,
+        table=table_name,
+        properties=connection_properties
+    )
+    
+    print(table_name, df_test.count())
+    display(df_test.limit(3))
 
 
 
 
-# Read source rows
-df_source = spark.read.jdbc(
-    url=jdbc_url,
-    table=source_query,
-    properties=connection_properties
-)
-
-if limit_rows_for_debugging:
-    df_source = df_source.limit(1000)
-
-print(df_source.count())
-display(df_source.limit(5))
-print(df_source.columns)
-
-
-
-
-
-# Clean using shared notebook helpers
-df_clean = clean_bronze_table(df_source, limit_rows_for_debugging)
-df_clean = df_clean.dropDuplicates()
-
-display(df_clean.limit(5))
-print(df_clean.columns)
-
-
-
-
-# Add metadata using shared notebook helper
-source_object = f"{source_schema_name}.{source_table_name}"
-
-df_clean = add_metadata(
-    df_clean,
-    str(date.today()),
-    source_object,
-    source_name,
-    target_table_name,
-    lineage_id
-)
-
-display(df_clean.limit(5))
-print(df_clean.columns)
-
-
-
-
-# Build hashed primary key
 def to_snake_case_local(string):
     string = re.sub(r"([a-z])([A-Z0-9])", r"\1_\2", string)
     string = re.sub(r"([A-Z])([A-Z][a-z])", r"\1_\2", string)
     return string.lower().strip()
 
-primary_keys_snake = [to_snake_case_local(c) for c in target_primary_keys]
-
-df_clean = df_clean.withColumn(
-    "hashed_pk",
-    F.sha2(F.concat_ws("||", *[F.col(c).cast("string") for c in primary_keys_snake]), 256)
-)
-
-display(df_clean.select(*primary_keys_snake, "hashed_pk").limit(5))
 
 
 
-
-
-# Prepare target schema and path
-target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
-target_table_path = f"{target_lakehouse_path}/Tables/{target_schema_name}/{target_table_name}"
-full_target_name = f"{target_schema_name}.{target_table_name}"
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema_name}")
-
-print(full_target_name)
-print(target_table_path)
+results = []
 
 
 
+for cfg in table_configs:
+    logger.info(f"Starting {cfg['source_table']} -> {cfg['target_schema']}.{cfg['target_table']}")
 
+    column_sql = ", ".join(cfg["select_columns"]) if cfg["select_columns"] else "*"
+    full_source_name = f"{cfg['source_schema']}.{cfg['source_table']}"
+
+    watermark_filter = ""
+    if (
+        cfg.get("is_incremental") == 1
+        and previous_watermark_datetime
+        and current_watermark_datetime
+        and cfg.get("incremental_column")
+    ):
+        watermark_filter = f"""
+        WHERE {cfg['incremental_column']} > '{previous_watermark_datetime}'
+          AND {cfg['incremental_column']} <= '{current_watermark_datetime}'
+        """
+
+    source_query = f"""
+    (
+        SELECT {column_sql}
+        FROM {full_source_name}
+        {watermark_filter}
+    ) AS src
+    """
+
+    logger.info(source_query)
+
+    df_source = spark.read.jdbc(
+        url=jdbc_url,
+        table=source_query,
+        properties=connection_properties
+    )
+
+    if limit_rows_for_debugging:
+        df_source = df_source.limit(1000)
+
+    temp_view_name = f"vw_{cfg['source_table'].lower()}"
+    df_source.createOrReplaceTempView(temp_view_name)
+
+    logger.info(f"Created temp view {temp_view_name}")
+
+    df_sql = spark.sql(f"SELECT * FROM {temp_view_name}")
+
+    df_clean = clean_bronze_table(df_sql, limit_rows_for_debugging)
+    df_clean = remove_exact_duplicates(df_clean)
+
+    df_clean = add_metadata(
+        df_clean,
+        str(date.today()),
+        full_source_name,
+        cfg["source_name"],
+        cfg["target_table"],
+        lineage_id
+    )
+
+    primary_keys_snake = [to_snake_case_local(c) for c in cfg["primary_keys"]]
+
+    df_clean = df_clean.withColumn(
+        "hashed_pk",
+        F.sha2(F.concat_ws("||", *[F.col(c).cast("string") for c in primary_keys_snake]), 256)
+    )
+
+    target_lakehouse_path = notebookutils.lakehouse.get(cfg["target_lakehouse_name"]).properties["abfsPath"]
+    target_table_path = f"{target_lakehouse_path}/Tables/{cfg['target_schema']}/{cfg['target_table']}"
+    full_target_name = f"{cfg['target_schema']}.{cfg['target_table']}"
+
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {cfg['target_schema']}")
+
+    load_to_target(df_clean, target_table_path, cfg["load_strategy"])
+
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {full_target_name}
+    USING DELTA
+    LOCATION '{target_table_path}'
+    """)
+
+    rows_written = spark.read.format("delta").load(target_table_path).count()
+
+    logger.info(f"Loaded {rows_written} rows into {full_target_name}")
+
+    results.append({
+        "source_table": full_source_name,
+        "target_table": full_target_name,
+        "rows_written": rows_written
+    })
+
+
+
+    print(results)
+
+
+
+    for result in results:
+    print(result["target_table"])
+    df_target = spark.table(result["target_table"])
+    print(df_target.count())
+    display(df_target.limit(5))
+
+
+
+    final_result = {
+    "status": "SUCCESS",
+    "tables_processed": len(results),
+    "details": results,
+    "lineage_id": lineage_id
+}
+
+print(final_result)
