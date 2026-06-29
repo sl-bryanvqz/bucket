@@ -1,26 +1,23 @@
-# Prepare to process each table from table_config
-results = []
+watermark_filter = "1 = 1"
+if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
+    watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
 
-for cfg in table_config:
-    source_schema = cfg.get("schema_name")
-    source_table = cfg.get("table_name")
-    target_table = cfg.get("target_table")
-    primary_keys = cfg.get("primary_keys", [])
-    column_list = cfg.get("select_columns", [])
-    is_incremental = cfg.get("is_incremental", 0)
-    watermark_col = cfg.get("incremental_column")
+source_query = f"""
+(
+    SELECT {column_list_sql}
+    FROM {full_source_name}
+    WHERE {watermark_filter}
+) AS src
+"""
 
-    full_source_name = f"{source_schema}.{source_table}"
-    full_target_name = f"{target_schema}.{target_table}"
-    column_list_sql = ", ".join(column_list)
+df_source = spark.read.jdbc(
+    url=jdbc_url,
+    table=source_query,
+    properties=connection_properties
+)
 
-    src_view = f"src_{source_table.lower()}"
-    delta_view = f"delta_{source_table.lower()}"
+df_source.createOrReplaceTempView(source_view)
 
-    logger.info(f"Starting {full_source_name} -> {full_target_name}")
-
-    print(full_source_name)
-    print(full_target_name)
-    print(column_list_sql)
-    print(src_view)
-    print(delta_view)
+display(df_source.limit(5))
+print(df_source.count())
+print(df_source.columns)
