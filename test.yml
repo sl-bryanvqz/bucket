@@ -1,2 +1,26 @@
-if not server_name:
-    server_name = "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com"
+# Prepare to process each table from table_config
+results = []
+
+for cfg in table_config:
+    source_schema = cfg.get("schema_name")
+    source_table = cfg.get("table_name")
+    target_table = cfg.get("target_table")
+    primary_keys = cfg.get("primary_keys", [])
+    column_list = cfg.get("select_columns", [])
+    is_incremental = cfg.get("is_incremental", 0)
+    watermark_col = cfg.get("incremental_column")
+
+    full_source_name = f"{source_schema}.{source_table}"
+    full_target_name = f"{target_schema}.{target_table}"
+    column_list_sql = ", ".join(column_list)
+
+    src_view = f"src_{source_table.lower()}"
+    delta_view = f"delta_{source_table.lower()}"
+
+    logger.info(f"Starting {full_source_name} -> {full_target_name}")
+
+    print(full_source_name)
+    print(full_target_name)
+    print(column_list_sql)
+    print(src_view)
+    print(delta_view)
