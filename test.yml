@@ -1,134 +1,223 @@
-# Framework-compatible parameters with manual fallbacks.
-# When pl_worker calls this notebook, it should pass these values.
+# Framework-style parameters with safe manual defaults for one-table testing.
 import json
 import uuid
-import logging
-from datetime import date
 
 task_id = 50
-parent_run_id = ""
+task_name = "Load SQL to silver - Address"
 task_executions_id = ""
+parent_run_id = ""
 lineage_id = str(uuid.uuid4())
-source_connection_settings = "{}"
+
+previous_watermark_datetime = None
+current_watermark_datetime = None
 limit_rows_for_debugging = False
 
-# Manual fallback for source settings.
+source_connection_settings = "{}"
+
 source_settings = json.dumps({
-    "lakehouse_name": "lh_canada_global_mds",
-    "folder_path": "Files/silver/transactional/silver_transactional_csv",
-    "source_system": "lh_canada_global_mds",
-    "table_config": [
-        {"source_file": "EFI.csv", "target_table": "silver_transactional_efi"},
-        {"source_file": "TME.csv", "target_table": "silver_transactional_tme"},
-        {"source_file": "ChronoMetrics.csv", "target_table": "silver_transactional_chrono_metrics"}
-    ]
+    "source_name": "CAN_RMDD",
+    "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+    "schema_name": "dbo",
+    "table_name": "Address",
+    "select_columns": [
+        "AddressID",
+        "AddressLine1",
+        "AddressLine2",
+        "City",
+        "StateProvince",
+        "CountryRegion",
+        "PostalCode",
+        "LastUpdatedDateGMT"
+    ],
+    "is_incremental": 0,
+    "incremental_column": "LastUpdatedDateGMT"
 })
 
-# Manual fallback for target settings.
 target_settings = json.dumps({
     "lakehouse_name": "lh_canada_global_mds",
-    "schema_name": "silver_transactional",
-    "load_strategy": "overwrite"
+    "schema_name": "sqldb_adventureworks",
+    "table_name": "sales_lt__address",
+    "load_strategy": "overwrite",
+    "primary_keys": ["AddressID"]
 })
 
 
-status = "Failed"
 
-try:
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
 
-    for cfg in table_config:
-        source_file = cfg["source_file"]
-        target_table = cfg["target_table"]
-        full_table_name = f"{target_schema}.{target_table}"
+%run nb_transactional_shared_functions
 
-        # Use relative OneLake paths since the lakehouse is already attached in the notebook.
-        source_file_path = f"{source_folder_path}/{source_file}"
-        target_table_path = f"Files/silver/transactional/{target_table}"
 
-        logger.info(f"Processing {source_file} -> {full_table_name}")
-        logger.info(f"Source path: {source_file_path}")
-        logger.info(f"Target path: {target_table_path}")
 
-        # Read source CSV file.
-        df = (
-            spark.read.format("csv")
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .option("delimiter", ",")
-            .load(source_file_path)
-        )
 
-        # Keep original column names so they match the silver schema you already created.
-        if limit_rows_for_debugging:
-            df = df.limit(1000)
+import logging
+import re
+from datetime import date
+import pyspark.sql.functions as F
+from notebookutils import mssparkutils
 
-        df = trim_all_string_columns(df)
-        df = replace_old_dates(df)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("LoadSqlToSilver")
+logger.setLevel(logging.INFO)
 
-        # Remove exact duplicate rows.
-        before_count = df.count()
-        df = remove_exact_duplicates(df)
-        after_count = df.count()
 
-        logger.info(f"{source_file} removed {before_count - after_count} duplicate rows")
 
-        # Stamp framework metadata columns.
-        df = add_metadata(
-            df=df,
-            ingest_date=str(date.today()),
-            file_path=source_file_path,
-            source_system=source_system,
-            table_name=target_table,
-            lineage_id=lineage_id
-        )
 
-        # Validate dataframe schema against the precreated target table schema.
-        target_df = spark.table(full_table_name)
+# Parse runtime settings
+source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
 
-        source_schema_map = {field.name: field.dataType.simpleString() for field in df.schema.fields}
-        target_schema_map = {field.name: field.dataType.simpleString() for field in target_df.schema.fields}
+source_name = source_settings.get("source_name")
+source_database = source_settings.get("database_name")
+source_schema_name = source_settings.get("schema_name")
+source_table_name = source_settings.get("table_name")
+select_columns = source_settings.get("select_columns", [])
+is_incremental = source_settings.get("is_incremental", 0)
+incremental_column = source_settings.get("incremental_column")
 
-        source_cols = set(source_schema_map.keys())
-        target_cols = set(target_schema_map.keys())
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema_name = target_settings.get("schema_name")
+target_table_name = target_settings.get("table_name")
+target_load_strategy = target_settings.get("load_strategy", "overwrite")
+target_primary_keys = target_settings.get("primary_keys", [])
 
-        missing_in_source = sorted(target_cols - source_cols)
-        extra_in_source = sorted(source_cols - target_cols)
+logger.info(source_settings)
+logger.info(target_settings)
 
-        type_mismatches = sorted(
-            [
-                f"{col}: source={source_schema_map[col]} target={target_schema_map[col]}"
-                for col in (source_cols & target_cols)
-                if source_schema_map[col] != target_schema_map[col]
-            ]
-        )
 
-        if missing_in_source or extra_in_source or type_mismatches:
-            error_parts = []
-            if missing_in_source:
-                error_parts.append(f"Missing in source: {missing_in_source}")
-            if extra_in_source:
-                error_parts.append(f"Extra in source: {extra_in_source}")
-            if type_mismatches:
-                error_parts.append(f"Type mismatches: {type_mismatches}")
 
-            raise ValueError(
-                f"Schema validation failed for {full_table_name}. " + " | ".join(error_parts)
-            )
 
-        # Reorder columns to match the target table exactly.
-        df = df.select(*target_df.columns)
+# Exact JDBC token connection style already used in the workspace snapshot
+jdbc_url = (
+    "jdbc:sqlserver://"
+    "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com:1433;"
+    f"database={source_database};"
+    "encrypt=true;"
+)
 
-        logger.info(f"Schema validation passed for {full_table_name}")
+connection_properties = {
+    "accessToken": mssparkutils.credentials.getToken("https://database.windows.net/"),
+    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+}
 
-        # Comment out this line if you only want to validate and not write.
-        load_to_target(df, target_table_path, target_load_strategy)
+print(jdbc_url)
+print(connection_properties)
 
-        logger.info(f"Loaded {source_file} into {full_table_name}")
 
-    status = "Completed"
 
-except Exception:
-    logger.exception("Processing error.")
-    status = "Failed"
-    raise
+# Smoke test the source connection
+df_test = spark.read.jdbc(
+    url=jdbc_url,
+    table=f"{source_schema_name}.{source_table_name}",
+    properties=connection_properties
+)
+
+print(df_test.count())
+display(df_test.limit(5))
+
+
+
+
+# Build source query
+column_sql = ", ".join(select_columns) if select_columns else "*"
+full_source_name = f"{source_schema_name}.{source_table_name}"
+
+watermark_filter = ""
+
+if is_incremental == 1 and previous_watermark_datetime and current_watermark_datetime and incremental_column:
+    watermark_filter = f"""
+    WHERE {incremental_column} > '{previous_watermark_datetime}'
+      AND {incremental_column} <= '{current_watermark_datetime}'
+    """
+
+source_query = f"""
+(
+    SELECT {column_sql}
+    FROM {full_source_name}
+    {watermark_filter}
+) AS src
+"""
+
+print(source_query)
+
+
+
+
+# Read source rows
+df_source = spark.read.jdbc(
+    url=jdbc_url,
+    table=source_query,
+    properties=connection_properties
+)
+
+if limit_rows_for_debugging:
+    df_source = df_source.limit(1000)
+
+print(df_source.count())
+display(df_source.limit(5))
+print(df_source.columns)
+
+
+
+
+
+# Clean using shared notebook helpers
+df_clean = clean_bronze_table(df_source, limit_rows_for_debugging)
+df_clean = df_clean.dropDuplicates()
+
+display(df_clean.limit(5))
+print(df_clean.columns)
+
+
+
+
+# Add metadata using shared notebook helper
+source_object = f"{source_schema_name}.{source_table_name}"
+
+df_clean = add_metadata(
+    df_clean,
+    str(date.today()),
+    source_object,
+    source_name,
+    target_table_name,
+    lineage_id
+)
+
+display(df_clean.limit(5))
+print(df_clean.columns)
+
+
+
+
+# Build hashed primary key
+def to_snake_case_local(string):
+    string = re.sub(r"([a-z])([A-Z0-9])", r"\1_\2", string)
+    string = re.sub(r"([A-Z])([A-Z][a-z])", r"\1_\2", string)
+    return string.lower().strip()
+
+primary_keys_snake = [to_snake_case_local(c) for c in target_primary_keys]
+
+df_clean = df_clean.withColumn(
+    "hashed_pk",
+    F.sha2(F.concat_ws("||", *[F.col(c).cast("string") for c in primary_keys_snake]), 256)
+)
+
+display(df_clean.select(*primary_keys_snake, "hashed_pk").limit(5))
+
+
+
+
+
+# Prepare target schema and path
+target_lakehouse_path = notebookutils.lakehouse.get(target_lakehouse_name).properties["abfsPath"]
+target_table_path = f"{target_lakehouse_path}/Tables/{target_schema_name}/{target_table_name}"
+full_target_name = f"{target_schema_name}.{target_table_name}"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema_name}")
+
+print(full_target_name)
+print(target_table_path)
+
+
+
+
