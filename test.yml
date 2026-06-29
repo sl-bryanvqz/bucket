@@ -1,14 +1,12 @@
-# Apply table-specific transformations to create the target temp views
+# Apply optional table-specific transformations
+# Metadata and _hashed_pk should already exist in silver_view
 for cfg in table_config:
 
-    # Table-level configuration
     source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
-    target_table = cfg.get("target_table")
 
-    # Reusable names for this table
     full_source_name = f"{source_schema}.{source_table}"
-    base_view = f"base_{source_table.lower()}"
+    silver_view = f"silver_{source_table.lower()}"
     target_view = f"tgt_{source_table.lower()}"
 
     # Address-specific transformation
@@ -39,7 +37,7 @@ for cfg in table_config:
             _table,
             _lineage_id,
             _hashed_pk
-        FROM {base_view}
+        FROM {silver_view}
         """)
 
     # Client-specific transformation
@@ -76,11 +74,16 @@ for cfg in table_config:
             _table,
             _lineage_id,
             _hashed_pk
-        FROM {base_view}
+        FROM {silver_view}
         """)
 
+    # Default: no transformation needed, just pass through
     else:
-        raise ValueError(f"No transformation defined for {source_table}")
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {target_view} AS
+        SELECT *
+        FROM {silver_view}
+        """)
 
     print(f"Transformed preview for {full_source_name}")
     display(spark.table(target_view).limit(3))
