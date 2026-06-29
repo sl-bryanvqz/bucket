@@ -1,125 +1,5 @@
-# Read and clean each source table
+# Add metadata and hashed key to the transformed tgt_* views
 for cfg in table_config:
-
-    source_schema = cfg.get("schema_name")
-    source_table = cfg.get("table_name")
-    column_list = cfg.get("select_columns", [])
-    is_incremental = cfg.get("is_incremental", 0)
-    watermark_col = cfg.get("incremental_column")
-
-    full_source_name = f"{source_schema}.{source_table}"
-    column_list_sql = ", ".join(column_list)
-    source_view = f"src_{source_table.lower()}"
-
-    watermark_filter = "1 = 1"
-    if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
-        watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
-
-    source_query = f"""
-    (
-        SELECT {column_list_sql}
-        FROM {full_source_name}
-        WHERE {watermark_filter}
-    ) AS src
-    """
-
-    df_source = spark.read.jdbc(
-        url=jdbc_url,
-        table=source_query,
-        properties=connection_properties
-    )
-
-    df_source_clean = clean_bronze_table(df_source, limit_rows_for_debugging=False)
-    df_source_clean = remove_exact_duplicates(df_source_clean)
-    df_source_clean.createOrReplaceTempView(source_view)
-
-    print(f"Cleaned preview for {full_source_name}")
-    display(df_source_clean.limit(3))
-
-
-
-
-
-
-# Apply table-specific transformations to create tgt_* views
-for cfg in table_config:
-
-    source_schema = cfg.get("schema_name")
-    source_table = cfg.get("table_name")
-
-    full_source_name = f"{source_schema}.{source_table}"
-    source_view = f"src_{source_table.lower()}"
-    target_view = f"tgt_{source_table.lower()}"
-
-    if source_table == "Address":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT
-            CAST(NULL AS BIGINT) AS address_key,
-            address_id,
-            address_type_code,
-            address_1,
-            address_2,
-            address_3,
-            address_4,
-            address_5,
-            city,
-            country_id,
-            CAST(NULL AS STRING) AS country_code_iso2,
-            state,
-            postal_code AS zip_code,
-            CAST(NULL AS STRING) AS street_address_check,
-            active AS is_active,
-            last_updated_date_gmt AS last_updated_date_utc_at_source
-        FROM {source_view}
-        """)
-
-    elif source_table == "Client":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT
-            CAST(NULL AS BIGINT) AS client_key,
-            client_number,
-            member_firm_code,
-            client_id,
-            pms_client_id,
-            client_name,
-            alternate_client_name,
-            contact_name,
-            open_date_gmt AS open_date_utc,
-            close_date_gmt AS close_date_utc,
-            client_duns,
-            client_gduns AS client_guduns,
-            comments,
-            pms_entity_type,
-            client_type,
-            is_confidential,
-            siccode AS sic_code,
-            CAST(NULL AS STRING) AS client_sector_key,
-            CAST(NULL AS BOOLEAN) AS is_sanctions_checked,
-            active AS is_active,
-            created_date_gmt AS created_date_utc_at_source,
-            last_updated_date_gmt AS last_updated_date_utc_at_source
-        FROM {source_view}
-        """)
-
-    else:
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {target_view} AS
-        SELECT *
-        FROM {source_view}
-        """)
-
-    print(f"Transformed preview for {full_source_name}")
-    display(spark.table(target_view).limit(3))
-
-
-
-
-
-    # Add metadata and hashed key to the transformed tgt_* views
-for cfg in table_config:
-
     source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
     target_table = cfg.get("target_table")
@@ -139,11 +19,11 @@ for cfg in table_config:
         lineage_id=lineage_id
     )
 
-    df_target = add_hashed_key(
-        df_target,
-        primary_keys,
-        output_col="_hashed_pk",
-        normalize_columns=True
+    pk_expr_cols = [to_snake_case(col) for col in primary_keys]
+
+    df_target = df_target.withColumn(
+        "_hashed_pk",
+        F.md5(F.concat_ws("|", *[F.col(col).cast("string") for col in pk_expr_cols]))
     )
 
     df_target.createOrReplaceTempView(target_view)
