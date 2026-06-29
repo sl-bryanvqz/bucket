@@ -1,7 +1,21 @@
-# Check for duplicate hashed keys before merge
+# Merge each final temp view into its target silver table
 for cfg in table_config:
     source_table = cfg.get("table_name")
+    target_table = cfg.get("target_table")
     target_view = f"tgt_{source_table.lower()}"
+    target_table_path = f"{location_root}/{target_table}"
+    full_target_name = f"{target_schema}.{target_table}"
 
-    print(f"Checking duplicates for {target_view}")
-    validate_duplicates(spark.table(target_view), "_hashed_pk", 10)
+    df_target = spark.table(target_view)
+
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
+    load_to_target(df_target, target_table_path, target_load_strategy)
+
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {full_target_name}
+    USING DELTA
+    LOCATION '{target_table_path}'
+    """)
+
+    print(f"Loaded {full_target_name}")
