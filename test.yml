@@ -1,27 +1,18 @@
-# Accept either JSON strings (framework) or already-parsed dicts (manual/debug).
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
+# Build one JDBC connection for the source SQL database
+if not server_name:
+    raise ValueError("source_connection_settings must include server_name, jdbc_hostname, or server")
 
-# Source configuration
-source_name = source_settings.get("source_name")
-source_database = source_settings.get("database_name")
-table_config = source_settings.get("table_config", [])
-
-# Target configuration
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema = target_settings.get("schema_name")
-target_load_strategy = target_settings.get("load_strategy", "merge")
-location_root = target_settings.get("location_root")
-
-# SQL connection configuration
-server_name = (
-    source_connection_settings.get("server_name")
-    or source_connection_settings.get("jdbc_hostname")
-    or source_connection_settings.get("server")
+jdbc_url = (
+    "jdbc:sqlserver://"
+    f"{server_name}:1433;"
+    f"database={source_database};"
+    "encrypt=true;"
 )
 
-print(source_name)
-print(source_database)
-print(target_schema)
-display(table_config)
+connection_properties = {
+    "accessToken": mssparkutils.credentials.getToken("https://database.windows.net/"),
+    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+}
+
+print(jdbc_url)
+print(connection_properties)
