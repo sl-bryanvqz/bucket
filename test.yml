@@ -4,15 +4,15 @@ if source_table == "PersonRelationship":
         SELECT
             CAST(ROW_NUMBER() OVER (
                 ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
-            ) AS BIGINT)                    AS person_relationship_key,
-            p1.SystemEmployeeCode           AS person_number_1,
-            p1.MemberFirmCode               AS member_firm_code_1,
-            p2.SystemEmployeeCode           AS person_number_2,
-            p2.MemberFirmCode               AS member_firm_code_2,
-            rt.RelationshipTypeName         AS relationship_description,
-            pr.PrimaryFlag                  AS primary_flag,
-            pr.Active                       AS is_active,
-            pr.LastUpdatedDateGMT           AS last_updated_date_utc_at_source
+            ) AS BIGINT)            AS person_relationship_key,
+            p1.SystemEmployeeCode   AS person_number_1,
+            p1.MemberFirmCode       AS member_firm_code_1,
+            p2.SystemEmployeeCode   AS person_number_2,
+            p2.MemberFirmCode       AS member_firm_code_2,
+            rt.RelationshipTypeName AS relationship_description,
+            pr.PrimaryFlag          AS primary_flag,
+            CAST(pr.Active AS BOOLEAN) AS is_active,
+            pr.LastUpdatedDateGMT   AS last_updated_date_utc_at_source
         FROM dbo.PersonRelationship pr
         LEFT JOIN dbo.Person p1
             ON pr.PersonID1 = p1.PersonID
@@ -20,7 +20,8 @@ if source_table == "PersonRelationship":
             ON pr.PersonID2 = p2.PersonID
         LEFT JOIN dbo.RelationshipType rt
             ON pr.RelationshipTypeID = rt.RelationshipTypeID
-        WHERE {watermark_filter}
+        WHERE pr.LastUpdatedDateGMT > '{prev_wm}'
+          AND pr.LastUpdatedDateGMT <= '{curr_wm}'
     ) AS src
     """
 else:
