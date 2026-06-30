@@ -1,159 +1,452 @@
-# Prepare raw lookup views for mapping tables
-df_person_lookup = spark.read.jdbc(
-    url=jdbc_url,
-    table="""
-    (
-        SELECT
-            PersonID,
-            SystemEmployeeCode,
-            MemberFirmCode
-        FROM dbo.Person
-    ) AS src
-    """,
-    properties=connection_properties
+# Define notebook parameters.
+# These values can be passed by pipeline later or used manually for testing.
+import json
+import uuid
+import logging
+from datetime import date, datetime
+from pyspark.sql import functions as F
+from delta.tables import DeltaTable
+
+# Basic notebook runtime values.
+task_id = 50
+task_name = "Load RMDD to silver"
+task_executions_id = ""
+parent_run_id = ""
+lineage_id = str(uuid.uuid4())
+limit_rows_for_debugging = False
+
+# Manual watermark values.
+prev_wm = "1900-01-01 00:00:00"
+curr_wm = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# Manual connection fallback.
+server_name = "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com"
+source_connection_settings = "{}"
+
+# Source config.
+# source_tables: first table is the main source; extra tables are used for joins.
+source_settings = json.dumps({
+    "source_name": "CAN_RMDD",
+    "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+    "table_config": [
+        {
+            "schema_name": "dbo",
+            "source_tables": ["Address"],
+            "target_table": "silver_rmdd_address",
+            "primary_keys": ["address_id"],
+            "is_incremental": 1,
+            "incremental_column": "LastUpdatedDateGMT"
+        },
+        {
+            "schema_name": "dbo",
+            "source_tables": ["Client"],
+            "target_table": "silver_rmdd_client",
+            "primary_keys": ["client_number", "member_firm_code"],
+            "is_incremental": 1,
+            "incremental_column": "LastUpdatedDateGMT"
+        },
+        {
+            "schema_name": "dbo",
+            "source_tables": ["Person"],
+            "target_table": "silver_rmdd_person",
+            "primary_keys": ["person_number", "member_firm_code"],
+            "is_incremental": 1,
+            "incremental_column": "LastUpdatedDateGMT"
+        },
+        {
+            "schema_name": "dbo",
+            "source_tables": ["PersonRelationship", "Person", "RelationshipType"],
+            "target_table": "silver_rmdd_person_relationship",
+            "primary_keys": [
+                "person_number_1",
+                "member_firm_code_1",
+                "person_number_2",
+                "member_firm_code_2"
+            ],
+            "is_incremental": 1,
+            "incremental_column": "LastUpdatedDateGMT"
+        }
+    ]
+})
+
+# Target config.
+target_settings = json.dumps({
+    "lakehouse_name": "lh_canada_global_mds",
+    "schema_name": "silver_rmdd",
+    "load_strategy": "merge",
+    "location_root": "Files/silver/rmdd"
+})
+
+
+
+
+# Set up standard framework logging.
+setup_logging()
+logger = logging.getLogger("LoadTransactionalToBase")
+logger.setLevel(logging.INFO)
+
+
+
+
+
+# Parse notebook settings.
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
+source_connection_settings = json.loads(source_connection_settings) if isinstance(source_connection_settings, str) else source_connection_settings
+
+# Source configuration.
+source_name = source_settings.get("source_name")
+source_database = source_settings.get("database_name")
+table_config = source_settings.get("table_config", [])
+
+# Target configuration.
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema = target_settings.get("schema_name")
+target_load_strategy = target_settings.get("load_strategy", "merge")
+location_root = target_settings.get("location_root")
+
+# SQL connection configuration.
+server_name = (
+    source_connection_settings.get("server_name")
+    or source_connection_settings.get("jdbc_hostname")
+    or source_connection_settings.get("server")
+    or server_name
 )
-df_person_lookup = remove_exact_duplicates(df_person_lookup)
-df_person_lookup.createOrReplaceTempView("lkp_person")
 
-df_relationship_type_lookup = spark.read.jdbc(
-    url=jdbc_url,
-    table="""
-    (
-        SELECT
-            RelationshipTypeID,
-            RelationshipTypeName
-        FROM dbo.RelationshipType
-    ) AS src
-    """,
-    properties=connection_properties
+# Quick validation output.
+print(source_name)
+print(source_database)
+print(target_schema)
+display(table_config)
+
+
+
+
+# Build JDBC connection to source SQL database.
+jdbc_url = (
+    "jdbc:sqlserver://"
+    f"{server_name}:1433;"
+    f"database={source_database};"
+    "encrypt=true;"
 )
-df_relationship_type_lookup = remove_exact_duplicates(df_relationship_type_lookup)
-df_relationship_type_lookup.createOrReplaceTempView("lkp_relationship_type")
+
+connection_properties = {
+    "accessToken": mssparkutils.credentials.getToken("https://database.windows.net/"),
+    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+}
+
+# Print JDBC URL only.
+print(jdbc_url)
 
 
 
 
-# All business transformations live here
+
+
+# Find every unique source table needed by the target mappings.
+source_tables_to_read = {}
+
 for cfg in table_config:
-    source_table = cfg.get("table_name")
-    source_view = f"src_{to_snake_case(source_table)}"
-    mapped_view = f"map_{to_snake_case(source_table)}"
+    source_schema = cfg.get("schema_name")
+    source_tables = cfg.get("source_tables", [])
 
-    if source_table == "Address":
+    if not source_tables:
+        raise ValueError(f"Missing source_tables for {cfg.get('target_table')}")
+
+    for source_table in source_tables:
+        source_view = f"src_{to_snake_case(source_table)}"
+
+        source_tables_to_read[source_view] = {
+            "schema_name": source_schema,
+            "source_table": source_table
+        }
+
+# Read source tables and create src_* temp views.
+# Watermark is not applied here because some source views are reused for joins.
+for source_view, source_cfg in source_tables_to_read.items():
+    source_schema = source_cfg.get("schema_name")
+    source_table = source_cfg.get("source_table")
+    full_source_name = f"{source_schema}.{source_table}"
+
+    source_query = f"""
+    (
+        SELECT *
+        FROM {full_source_name}
+    ) AS src
+    """
+
+    # Read source table from SQL.
+    df_source = spark.read.jdbc(
+        url=jdbc_url,
+        table=source_query,
+        properties=connection_properties
+    )
+
+    # Drop exact duplicates only.
+    df_source = remove_exact_duplicates(df_source)
+
+    # Create source temp view.
+    df_source.createOrReplaceTempView(source_view)
+
+    # Preview source data.
+    print(f"Source preview for {source_view} ({full_source_name})")
+    display(df_source.limit(3))
+
+
+
+
+# Map source views into target shape.
+# This is the only cell that contains business mapping and joins.
+for cfg in table_config:
+    source_tables = cfg.get("source_tables", [])
+    main_source_table = source_tables[0]
+    main_source_view = f"src_{to_snake_case(main_source_table)}"
+
+    target_table = cfg.get("target_table")
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    map_view = f"map_{target_entity}"
+
+    # Build watermark filter for this target table.
+    watermark_col = cfg.get("incremental_column")
+    is_incremental = cfg.get("is_incremental", 0)
+
+    if target_entity == "address":
+        watermark_filter = "1 = 1"
+        if is_incremental == 1 and watermark_col:
+            watermark_filter = f"s.{watermark_col} > '{prev_wm}' AND s.{watermark_col} <= '{curr_wm}'"
+
+        # Map Address.
         spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (ORDER BY AddressID) AS BIGINT) AS address_key,
-            AddressID               AS address_id,
-            AddressTypeCode         AS address_type_code,
-            Address1                AS address_1,
-            Address2                AS address_2,
-            Address3                AS address_3,
-            Address4                AS address_4,
-            Address5                AS address_5,
-            City                    AS city,
-            CountryID               AS country_id,
-            CAST(NULL AS STRING)    AS country_code_iso2,
-            State                   AS state,
-            PostalCode              AS zip_code,
-            Address1                AS street_address_check,
-            CAST(Active AS BOOLEAN) AS is_active,
-            LastUpdatedDateGMT      AS last_updated_date_utc_at_source
-        FROM {source_view}
+            CAST(row_number() OVER (ORDER BY s.AddressID) AS BIGINT) AS address_key,
+            s.AddressID               AS address_id,
+            s.AddressTypeCode         AS address_type_code,
+            s.Address1                AS address_1,
+            s.Address2                AS address_2,
+            s.Address3                AS address_3,
+            s.Address4                AS address_4,
+            s.Address5                AS address_5,
+            s.City                    AS city,
+            s.CountryID               AS country_id,
+            CAST(NULL AS STRING)      AS country_code_iso2,
+            s.State                   AS state,
+            s.PostalCode              AS zip_code,
+            s.Address1                AS street_address_check,
+            s.Active                  AS is_active,
+            s.LastUpdatedDateGMT      AS last_updated_date_utc_at_source
+        FROM {main_source_view} s
+        WHERE {watermark_filter}
         """)
 
-    elif source_table == "Client":
+    elif target_entity == "client":
+        watermark_filter = "1 = 1"
+        if is_incremental == 1 and watermark_col:
+            watermark_filter = f"s.{watermark_col} > '{prev_wm}' AND s.{watermark_col} <= '{curr_wm}'"
+
+        # Map Client.
         spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (ORDER BY ClientID) AS BIGINT) AS client_key,
-            ClientNumber            AS client_number,
-            MemberFirmCode          AS member_firm_code,
-            ClientID                AS client_id,
-            PMSClientID             AS pms_client_id,
-            ClientName              AS client_name,
-            AlternateClientName     AS alternate_client_name,
-            ContactName             AS contact_name,
-            OpenDateGMT             AS open_date_utc,
-            CloseDateGMT            AS close_date_utc,
-            ClientDUNS              AS client_duns,
-            ClientGUDUNS            AS client_guduns,
-            Comments                AS comments,
-            PMSEntityType           AS pms_entity_type,
-            ClientType              AS client_type,
-            IsConfidential          AS is_confidential,
-            SICCode                 AS sic_code,
-            CAST(NULL AS STRING)    AS client_sector_key,
-            SanctionsChecked_YN     AS is_sanctions_checked,
-            CAST(Active AS BOOLEAN) AS is_active,
-            CreatedDateGMT          AS created_date_utc_at_source,
-            LastUpdatedDateGMT      AS last_updated_date_utc_at_source
-        FROM {source_view}
+            CAST(row_number() OVER (ORDER BY s.ClientID) AS BIGINT) AS client_key,
+            s.ClientNumber            AS client_number,
+            s.MemberFirmCode          AS member_firm_code,
+            s.ClientID                AS client_id,
+            s.PMSClientID             AS pms_client_id,
+            s.ClientName              AS client_name,
+            s.AlternateClientName     AS alternate_client_name,
+            s.ContactName             AS contact_name,
+            s.OpenDateGMT             AS open_date_utc,
+            s.CloseDateGMT            AS close_date_utc,
+            s.ClientDUNS              AS client_duns,
+            s.ClientGUDUNS            AS client_guduns,
+            s.Comments                AS comments,
+            s.PMSEntityType           AS pms_entity_type,
+            s.ClientType              AS client_type,
+            s.IsConfidential          AS is_confidential,
+            s.SICCode                 AS sic_code,
+            CAST(NULL AS STRING)      AS client_sector_key,
+            s.SanctionsChecked_YN     AS is_sanctions_checked,
+            s.Active                  AS is_active,
+            s.CreatedDateGMT          AS created_date_utc_at_source,
+            s.LastUpdatedDateGMT      AS last_updated_date_utc_at_source
+        FROM {main_source_view} s
+        WHERE {watermark_filter}
         """)
 
-    elif source_table == "Person":
+    elif target_entity == "person":
+        watermark_filter = "1 = 1"
+        if is_incremental == 1 and watermark_col:
+            watermark_filter = f"s.{watermark_col} > '{prev_wm}' AND s.{watermark_col} <= '{curr_wm}'"
+
+        # Map Person.
         spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (ORDER BY PersonID) AS BIGINT) AS person_key,
-            SystemEmployeeCode              AS person_number,
-            MemberFirmCode                  AS member_firm_code,
-            PersonID                        AS person_id,
-            PersonStatusCode                AS person_status_code,
-            Gender                          AS gender,
-            Prefix                          AS prefix,
-            FirstName                       AS first_name,
-            FirstNameKnownAs                AS first_name_known_as,
-            MiddleName                      AS middle_name,
-            LastName                        AS last_name,
-            Suffix                          AS suffix,
-            Initials                        AS initials,
-            PhotoPath                       AS photo_path,
-            CommencementDateGMT             AS commencement_date_utc,
-            DepartureDateGMT                AS departure_date_utc,
-            LeaveStatus                     AS leave_status,
-            SubTeamID                       AS team_key,
-            JobTitle                        AS job_title,
-            JobTitlePMS                     AS job_title_pms,
-            PracticeGroup                   AS practice_group_code,
-            CAST(NULL AS STRING)            AS practice_group_key,
-            CAST(YearOfCall AS STRING)      AS year_of_call,
-            LastName                        AS employee_name_reporting,
-            CAST(DeleteFlag AS BOOLEAN)     AS is_active,
-            LastUpdatedDateGMT              AS last_updated_date_utc_at_source
-        FROM {source_view}
+            CAST(row_number() OVER (ORDER BY s.PersonID) AS BIGINT) AS person_key,
+            s.SystemEmployeeCode              AS person_number,
+            s.MemberFirmCode                  AS member_firm_code,
+            s.PersonID                        AS person_id,
+            s.PersonStatusCode                AS person_status_code,
+            s.Gender                          AS gender,
+            s.Prefix                          AS prefix,
+            s.FirstName                       AS first_name,
+            s.FirstNameKnownAs                AS first_name_known_as,
+            s.MiddleName                      AS middle_name,
+            s.LastName                        AS last_name,
+            s.Suffix                          AS suffix,
+            s.Initials                        AS initials,
+            s.PhotoPath                       AS photo_path,
+            s.CommencementDateGMT             AS commencement_date_utc,
+            s.DepartureDateGMT                AS departure_date_utc,
+            s.LeaveStatus                     AS leave_status,
+            s.SubTeamID                       AS team_key,
+            s.JobTitle                        AS job_title,
+            s.JobTitlePMS                     AS job_title_pms,
+            s.PracticeGroup                   AS practice_group_code,
+            CAST(NULL AS STRING)              AS practice_group_key,
+            CAST(s.YearOfCall AS STRING)      AS year_of_call,
+            s.LastName                        AS employee_name_reporting,
+            CAST(s.DeleteFlag AS BOOLEAN)     AS is_active,
+            s.LastUpdatedDateGMT              AS last_updated_date_utc_at_source
+        FROM {main_source_view} s
+        WHERE {watermark_filter}
         """)
 
-    elif source_table == "PersonRelationship":
+    elif target_entity == "person_relationship":
+        if len(source_tables) < 3:
+            raise ValueError("PersonRelationship requires source_tables: PersonRelationship, Person, RelationshipType")
+
+        person_relationship_view = f"src_{to_snake_case(source_tables[0])}"
+        person_view = f"src_{to_snake_case(source_tables[1])}"
+        relationship_type_view = f"src_{to_snake_case(source_tables[2])}"
+
+        watermark_filter = "1 = 1"
+        if is_incremental == 1 and watermark_col:
+            watermark_filter = f"pr.{watermark_col} > '{prev_wm}' AND pr.{watermark_col} <= '{curr_wm}'"
+
+        # Map PersonRelationship using Person and RelationshipType source views.
         spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
             CAST(row_number() OVER (
                 ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
-            ) AS BIGINT)                AS person_relationship_key,
-            p1.SystemEmployeeCode       AS person_number_1,
-            p1.MemberFirmCode           AS member_firm_code_1,
-            p2.SystemEmployeeCode       AS person_number_2,
-            p2.MemberFirmCode           AS member_firm_code_2,
-            rt.RelationshipTypeName     AS relationship_description,
-            pr.PrimaryFlag              AS primary_flag,
-            CAST(pr.Active AS BOOLEAN)  AS is_active,
-            pr.LastUpdatedDateGMT       AS last_updated_date_utc_at_source
-        FROM {source_view} pr
-        LEFT JOIN lkp_person p1
+            ) AS BIGINT)            AS person_relationship_key,
+            p1.SystemEmployeeCode   AS person_number_1,
+            p1.MemberFirmCode       AS member_firm_code_1,
+            p2.SystemEmployeeCode   AS person_number_2,
+            p2.MemberFirmCode       AS member_firm_code_2,
+            rt.RelationshipTypeName AS relationship_description,
+            pr.PrimaryFlag          AS primary_flag,
+            pr.Active               AS is_active,
+            pr.LastUpdatedDateGMT   AS last_updated_date_utc_at_source
+        FROM {person_relationship_view} pr
+        LEFT JOIN {person_view} p1
             ON pr.PersonID1 = p1.PersonID
-        LEFT JOIN lkp_person p2
+        LEFT JOIN {person_view} p2
             ON pr.PersonID2 = p2.PersonID
-        LEFT JOIN lkp_relationship_type rt
+        LEFT JOIN {relationship_type_view} rt
             ON pr.RelationshipTypeID = rt.RelationshipTypeID
+        WHERE {watermark_filter}
         """)
 
     else:
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
-        SELECT *
-        FROM {source_view}
-        """)
+        raise ValueError(f"No mapping defined for {target_table}")
 
-    print(f"Mapped preview for {mapped_view}")
-    display(spark.table(mapped_view).limit(3))
+    # Preview mapped data.
+    print(f"Mapped preview for {map_view}")
+    display(spark.table(map_view).limit(3))
+
+
+
+
+# Add metadata and _hashed_pk to mapped views.
+# This creates final tgt_* views used by validation and merge.
+for cfg in table_config:
+    source_schema = cfg.get("schema_name")
+    source_tables = cfg.get("source_tables", [])
+    target_table = cfg.get("target_table")
+    primary_keys = cfg.get("primary_keys", [])
+
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    map_view = f"map_{target_entity}"
+    target_view = f"tgt_{target_entity}"
+    source_file = ", ".join([f"{source_schema}.{source_table}" for source_table in source_tables])
+
+    # Read mapped temp view.
+    df_target = spark.table(map_view)
+
+    # Add framework metadata.
+    df_target = add_metadata(
+        df=df_target,
+        ingest_date=str(date.today()),
+        file_path=source_file,
+        schema_name=source_name,
+        table_name=target_table,
+        lineage_id=lineage_id
+    )
+
+    # Build hashed primary key.
+    pk_expr_cols = [to_snake_case(col) for col in primary_keys]
+
+    df_target = df_target.withColumn(
+        "_hashed_pk",
+        F.md5(F.concat_ws("|", *[F.col(col).cast("string") for col in pk_expr_cols]))
+    )
+
+    # Create final target temp view.
+    df_target.createOrReplaceTempView(target_view)
+
+    # Preview final data.
+    print(f"Final preview for {target_view}")
+    display(df_target.limit(3))
+
+
+
+
+# Check duplicate hashed keys before merge.
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    target_view = f"tgt_{target_entity}"
+
+    # Validate duplicate primary keys.
+    print(f"Checking duplicates for {target_view}")
+    validate_duplicates(spark.table(target_view), "_hashed_pk", 10)
+
+
+
+
+# Merge final temp views into existing target silver tables.
+# Target table creation is owned by the isolated schema notebook.
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    target_view = f"tgt_{target_entity}"
+    target_table_path = f"{location_root}/{target_table}"
+    full_target_name = f"{target_schema}.{target_table}"
+
+    # Load delta files.
+    df_target = spark.table(target_view)
+    load_to_target(df_target, target_table_path, target_load_strategy)
+
+    # Print merge metrics.
+    delta_table = DeltaTable.forPath(spark, target_table_path)
+    operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
+
+    rows_inserted = int(operation_metrics.get("numTargetRowsInserted", operation_metrics.get("numOutputRows", 0)))
+    rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
+    rows_affected = rows_inserted + rows_updated
+
+    print(full_target_name)
+    print(f"rows_affected: {rows_affected}")
