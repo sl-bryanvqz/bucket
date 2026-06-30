@@ -1,7 +1,175 @@
-# Check for duplicate hashed keys before merge
+source_settings = json.dumps({
+    "source_name": "CAN_RMDD",
+    "database_name": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+    "table_config": [
+        {
+            "schema_name": "dbo",
+            "table_name": "Address",
+            "target_table": "silver_rmdd_address",
+            "primary_keys": ["AddressID"],
+            "select_columns": [
+                "AddressID",
+                "AddressTypeCode",
+                "Address1",
+                "Address2",
+                "Address3",
+                "Address4",
+                "Address5",
+                "City",
+                "CountryID",
+                "State",
+                "PostalCode",
+                "Active",
+                "LastUpdatedDateGMT"
+            ],
+            "is_incremental": 0,
+            "incremental_column": "LastUpdatedDateGMT"
+        },
+        {
+            "schema_name": "dbo",
+            "table_name": "Client",
+            "target_table": "silver_rmdd_client",
+            "primary_keys": ["ClientID"],
+            "select_columns": [
+                "ClientID",
+                "ClientNumber",
+                "MemberFirmCode",
+                "PMSClientID",
+                "ClientName",
+                "AlternateClientName",
+                "ContactName",
+                "OpenDateGMT",
+                "CloseDateGMT",
+                "ClientDUNS",
+                "ClientGUDUNS",
+                "Comments",
+                "PMSEntityType",
+                "ClientType",
+                "IsConfidential",
+                "SICCode",
+                "SanctionsChecked_YN",
+                "Active",
+                "CreatedDateGMT",
+                "LastUpdatedDateGMT"
+            ],
+            "is_incremental": 0,
+            "incremental_column": "LastUpdatedDateGMT"
+        }
+    ]
+})
+
+
+
+
+
+# Read each source table and drop exact duplicates only
 for cfg in table_config:
+
+    source_schema = cfg.get("schema_name")
     source_table = cfg.get("table_name")
+    column_list = cfg.get("select_columns", [])
+    is_incremental = cfg.get("is_incremental", 0)
+    watermark_col = cfg.get("incremental_column")
+
+    full_source_name = f"{source_schema}.{source_table}"
+    column_list_sql = ", ".join(column_list)
+    source_view = f"src_{source_table.lower()}"
+
+    watermark_filter = "1 = 1"
+    if is_incremental == 1 and prev_wm and curr_wm and watermark_col:
+        watermark_filter = f"{watermark_col} > '{prev_wm}' AND {watermark_col} <= '{curr_wm}'"
+
+    source_query = f"""
+    (
+        SELECT {column_list_sql}
+        FROM {full_source_name}
+        WHERE {watermark_filter}
+    ) AS src
+    """
+
+    df_source = spark.read.jdbc(
+        url=jdbc_url,
+        table=source_query,
+        properties=connection_properties
+    )
+
+    df_source = remove_exact_duplicates(df_source)
+    df_source.createOrReplaceTempView(source_view)
+
+    print(f"Source preview for {full_source_name}")
+    display(df_source.limit(3))
+
+
+
+
+# Map source columns into the target shape
+for cfg in table_config:
+
+    source_schema = cfg.get("schema_name")
+    source_table = cfg.get("table_name")
+
+    full_source_name = f"{source_schema}.{source_table}"
+    source_view = f"src_{source_table.lower()}"
     target_view = f"tgt_{source_table.lower()}"
 
-    print(f"Checking duplicates for {source_table}")
-    validate_duplicates(spark.table(target_view), "_hashed_pk", 10)
+    if source_table == "Address":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {target_view} AS
+        SELECT
+            CAST(NULL AS BIGINT) AS address_key,
+            AddressID AS address_id,
+            AddressTypeCode AS address_type_code,
+            Address1 AS address_1,
+            Address2 AS address_2,
+            Address3 AS address_3,
+            Address4 AS address_4,
+            Address5 AS address_5,
+            City AS city,
+            CountryID AS country_id,
+            CAST(NULL AS STRING) AS country_code_iso2,
+            State AS state,
+            PostalCode AS zip_code,
+            Address1 AS street_address_check,
+            Active AS is_active,
+            LastUpdatedDateGMT AS last_updated_date_utc_at_source
+        FROM {source_view}
+        """)
+
+    elif source_table == "Client":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {target_view} AS
+        SELECT
+            CAST(NULL AS BIGINT) AS client_key,
+            ClientNumber AS client_number,
+            MemberFirmCode AS member_firm_code,
+            ClientID AS client_id,
+            PMSClientID AS pms_client_id,
+            ClientName AS client_name,
+            AlternateClientName AS alternate_client_name,
+            ContactName AS contact_name,
+            OpenDateGMT AS open_date_utc,
+            CloseDateGMT AS close_date_utc,
+            ClientDUNS AS client_duns,
+            ClientGUDUNS AS client_guduns,
+            Comments AS comments,
+            PMSEntityType AS pms_entity_type,
+            ClientType AS client_type,
+            IsConfidential AS is_confidential,
+            SICCode AS sic_code,
+            CAST(NULL AS STRING) AS client_sector_key,
+            SanctionsChecked_YN AS is_sanctions_checked,
+            Active AS is_active,
+            CreatedDateGMT AS created_date_utc_at_source,
+            LastUpdatedDateGMT AS last_updated_date_utc_at_source
+        FROM {source_view}
+        """)
+
+    else:
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {target_view} AS
+        SELECT *
+        FROM {source_view}
+        """)
+
+    print(f"Mapped preview for {full_source_name}")
+    display(spark.table(target_view).limit(3))
