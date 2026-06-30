@@ -1,34 +1,159 @@
-if source_table == "PersonRelationship":
-    source_query = f"""
+# Prepare raw lookup views for mapping tables
+df_person_lookup = spark.read.jdbc(
+    url=jdbc_url,
+    table="""
     (
         SELECT
-            CAST(ROW_NUMBER() OVER (
-                ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
-            ) AS BIGINT)            AS person_relationship_key,
-            p1.SystemEmployeeCode   AS person_number_1,
-            p1.MemberFirmCode       AS member_firm_code_1,
-            p2.SystemEmployeeCode   AS person_number_2,
-            p2.MemberFirmCode       AS member_firm_code_2,
-            rt.RelationshipTypeName AS relationship_description,
-            pr.PrimaryFlag          AS primary_flag,
-            CAST(pr.Active AS BOOLEAN) AS is_active,
-            pr.LastUpdatedDateGMT   AS last_updated_date_utc_at_source
-        FROM dbo.PersonRelationship pr
-        LEFT JOIN dbo.Person p1
-            ON pr.PersonID1 = p1.PersonID
-        LEFT JOIN dbo.Person p2
-            ON pr.PersonID2 = p2.PersonID
-        LEFT JOIN dbo.RelationshipType rt
-            ON pr.RelationshipTypeID = rt.RelationshipTypeID
-        WHERE pr.LastUpdatedDateGMT > '{prev_wm}'
-          AND pr.LastUpdatedDateGMT <= '{curr_wm}'
+            PersonID,
+            SystemEmployeeCode,
+            MemberFirmCode
+        FROM dbo.Person
     ) AS src
-    """
-else:
-    source_query = f"""
+    """,
+    properties=connection_properties
+)
+df_person_lookup = remove_exact_duplicates(df_person_lookup)
+df_person_lookup.createOrReplaceTempView("lkp_person")
+
+df_relationship_type_lookup = spark.read.jdbc(
+    url=jdbc_url,
+    table="""
     (
-        SELECT {column_list_sql}
-        FROM {full_source_name}
-        WHERE {watermark_filter}
+        SELECT
+            RelationshipTypeID,
+            RelationshipTypeName
+        FROM dbo.RelationshipType
     ) AS src
-    """
+    """,
+    properties=connection_properties
+)
+df_relationship_type_lookup = remove_exact_duplicates(df_relationship_type_lookup)
+df_relationship_type_lookup.createOrReplaceTempView("lkp_relationship_type")
+
+
+
+
+# All business transformations live here
+for cfg in table_config:
+    source_table = cfg.get("table_name")
+    source_view = f"src_{to_snake_case(source_table)}"
+    mapped_view = f"map_{to_snake_case(source_table)}"
+
+    if source_table == "Address":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        SELECT
+            CAST(row_number() OVER (ORDER BY AddressID) AS BIGINT) AS address_key,
+            AddressID               AS address_id,
+            AddressTypeCode         AS address_type_code,
+            Address1                AS address_1,
+            Address2                AS address_2,
+            Address3                AS address_3,
+            Address4                AS address_4,
+            Address5                AS address_5,
+            City                    AS city,
+            CountryID               AS country_id,
+            CAST(NULL AS STRING)    AS country_code_iso2,
+            State                   AS state,
+            PostalCode              AS zip_code,
+            Address1                AS street_address_check,
+            CAST(Active AS BOOLEAN) AS is_active,
+            LastUpdatedDateGMT      AS last_updated_date_utc_at_source
+        FROM {source_view}
+        """)
+
+    elif source_table == "Client":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        SELECT
+            CAST(row_number() OVER (ORDER BY ClientID) AS BIGINT) AS client_key,
+            ClientNumber            AS client_number,
+            MemberFirmCode          AS member_firm_code,
+            ClientID                AS client_id,
+            PMSClientID             AS pms_client_id,
+            ClientName              AS client_name,
+            AlternateClientName     AS alternate_client_name,
+            ContactName             AS contact_name,
+            OpenDateGMT             AS open_date_utc,
+            CloseDateGMT            AS close_date_utc,
+            ClientDUNS              AS client_duns,
+            ClientGUDUNS            AS client_guduns,
+            Comments                AS comments,
+            PMSEntityType           AS pms_entity_type,
+            ClientType              AS client_type,
+            IsConfidential          AS is_confidential,
+            SICCode                 AS sic_code,
+            CAST(NULL AS STRING)    AS client_sector_key,
+            SanctionsChecked_YN     AS is_sanctions_checked,
+            CAST(Active AS BOOLEAN) AS is_active,
+            CreatedDateGMT          AS created_date_utc_at_source,
+            LastUpdatedDateGMT      AS last_updated_date_utc_at_source
+        FROM {source_view}
+        """)
+
+    elif source_table == "Person":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        SELECT
+            CAST(row_number() OVER (ORDER BY PersonID) AS BIGINT) AS person_key,
+            SystemEmployeeCode              AS person_number,
+            MemberFirmCode                  AS member_firm_code,
+            PersonID                        AS person_id,
+            PersonStatusCode                AS person_status_code,
+            Gender                          AS gender,
+            Prefix                          AS prefix,
+            FirstName                       AS first_name,
+            FirstNameKnownAs                AS first_name_known_as,
+            MiddleName                      AS middle_name,
+            LastName                        AS last_name,
+            Suffix                          AS suffix,
+            Initials                        AS initials,
+            PhotoPath                       AS photo_path,
+            CommencementDateGMT             AS commencement_date_utc,
+            DepartureDateGMT                AS departure_date_utc,
+            LeaveStatus                     AS leave_status,
+            SubTeamID                       AS team_key,
+            JobTitle                        AS job_title,
+            JobTitlePMS                     AS job_title_pms,
+            PracticeGroup                   AS practice_group_code,
+            CAST(NULL AS STRING)            AS practice_group_key,
+            CAST(YearOfCall AS STRING)      AS year_of_call,
+            LastName                        AS employee_name_reporting,
+            CAST(DeleteFlag AS BOOLEAN)     AS is_active,
+            LastUpdatedDateGMT              AS last_updated_date_utc_at_source
+        FROM {source_view}
+        """)
+
+    elif source_table == "PersonRelationship":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        SELECT
+            CAST(row_number() OVER (
+                ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
+            ) AS BIGINT)                AS person_relationship_key,
+            p1.SystemEmployeeCode       AS person_number_1,
+            p1.MemberFirmCode           AS member_firm_code_1,
+            p2.SystemEmployeeCode       AS person_number_2,
+            p2.MemberFirmCode           AS member_firm_code_2,
+            rt.RelationshipTypeName     AS relationship_description,
+            pr.PrimaryFlag              AS primary_flag,
+            CAST(pr.Active AS BOOLEAN)  AS is_active,
+            pr.LastUpdatedDateGMT       AS last_updated_date_utc_at_source
+        FROM {source_view} pr
+        LEFT JOIN lkp_person p1
+            ON pr.PersonID1 = p1.PersonID
+        LEFT JOIN lkp_person p2
+            ON pr.PersonID2 = p2.PersonID
+        LEFT JOIN lkp_relationship_type rt
+            ON pr.RelationshipTypeID = rt.RelationshipTypeID
+        """)
+
+    else:
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {mapped_view} AS
+        SELECT *
+        FROM {source_view}
+        """)
+
+    print(f"Mapped preview for {mapped_view}")
+    display(spark.table(mapped_view).limit(3))
