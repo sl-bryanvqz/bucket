@@ -1,28 +1,32 @@
-from delta.tables import DeltaTable
-
-for cfg in table_config:
-    source_table = cfg.get("table_name")
-    target_table = cfg.get("target_table")
-    target_view = f"tgt_{source_table.lower()}"
-    target_table_path = f"{location_root}/{target_table}"
-    full_target_name = f"{target_schema}.{target_table}"
-
-    df_target = spark.table(target_view)
-
-    load_to_target(df_target, target_table_path, target_load_strategy)
-
+elif source_table == "Person":
     spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {full_target_name}
-    USING DELTA
-    LOCATION '{target_table_path}'
+    CREATE OR REPLACE TEMP VIEW {target_view} AS
+    SELECT
+        CAST(PersonID AS BIGINT)        AS person_key,
+        SystemEmployeeCode              AS person_number,
+        MemberFirmCode                  AS member_firm_code,
+        PersonID                        AS person_id,
+        PersonStatusCode                AS person_status_code,
+        Gender                          AS gender,
+        Prefix                          AS prefix,
+        FirstName                       AS first_name,
+        FirstNameKnownAs                AS first_name_known_as,
+        MiddleName                      AS middle_name,
+        LastName                        AS last_name,
+        Suffix                          AS suffix,
+        Initials                        AS initials,
+        PhotoPath                       AS photo_path,
+        CommencementDateGMT             AS commencement_date_utc,
+        DepartureDateGMT                AS departure_date_utc,
+        LeaveStatus                     AS leave_status,
+        SubTeamID                       AS team_key,
+        JobTitle                        AS job_title,
+        JobTitlePMS                     AS job_title_pms,
+        PracticeGroup                   AS practice_group_code,
+        CAST(NULL AS STRING)            AS practice_group_key,
+        YearOfCall                      AS year_of_call,
+        LastName                        AS employee_name_reporting,
+        DeleteFlag                      AS is_active,
+        LastUpdatedDateGMT              AS last_updated_date_utc_at_source
+    FROM {source_view}
     """)
-
-    delta_table = DeltaTable.forPath(spark, target_table_path)
-    operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
-
-    rows_inserted = int(operation_metrics.get("numTargetRowsInserted", operation_metrics.get("numOutputRows", 0)))
-    rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
-    rows_affected = rows_inserted + rows_updated
-
-    print(full_target_name)
-    print(f"rows_affected: {rows_affected}")
