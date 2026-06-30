@@ -1,32 +1,59 @@
-elif source_table == "Person":
+elif source_table == "PersonRelationship":
+    person_lookup_view = "lkp_person_relationship_person"
+    relationship_type_view = "lkp_person_relationship_type"
+
+    # Full Person lookup for PersonID1 / PersonID2
+    df_person_lookup = spark.read.jdbc(
+        url=jdbc_url,
+        table="""
+        (
+            SELECT
+                PersonID,
+                SystemEmployeeCode,
+                MemberFirmCode
+            FROM dbo.Person
+        ) AS src
+        """,
+        properties=connection_properties
+    )
+    df_person_lookup = remove_exact_duplicates(df_person_lookup)
+    df_person_lookup.createOrReplaceTempView(person_lookup_view)
+
+    # Full RelationshipType lookup
+    df_relationship_type_lookup = spark.read.jdbc(
+        url=jdbc_url,
+        table="""
+        (
+            SELECT
+                RelationshipTypeID,
+                RelationshipTypeName
+            FROM dbo.RelationshipType
+        ) AS src
+        """,
+        properties=connection_properties
+    )
+    df_relationship_type_lookup = remove_exact_duplicates(df_relationship_type_lookup)
+    df_relationship_type_lookup.createOrReplaceTempView(relationship_type_view)
+
     spark.sql(f"""
     CREATE OR REPLACE TEMP VIEW {target_view} AS
     SELECT
-        CAST(PersonID AS BIGINT)        AS person_key,
-        SystemEmployeeCode              AS person_number,
-        MemberFirmCode                  AS member_firm_code,
-        PersonID                        AS person_id,
-        PersonStatusCode                AS person_status_code,
-        Gender                          AS gender,
-        Prefix                          AS prefix,
-        FirstName                       AS first_name,
-        FirstNameKnownAs                AS first_name_known_as,
-        MiddleName                      AS middle_name,
-        LastName                        AS last_name,
-        Suffix                          AS suffix,
-        Initials                        AS initials,
-        PhotoPath                       AS photo_path,
-        CommencementDateGMT             AS commencement_date_utc,
-        DepartureDateGMT                AS departure_date_utc,
-        LeaveStatus                     AS leave_status,
-        SubTeamID                       AS team_key,
-        JobTitle                        AS job_title,
-        JobTitlePMS                     AS job_title_pms,
-        PracticeGroup                   AS practice_group_code,
-        CAST(NULL AS STRING)            AS practice_group_key,
-        YearOfCall                      AS year_of_call,
-        LastName                        AS employee_name_reporting,
-        DeleteFlag                      AS is_active,
-        LastUpdatedDateGMT              AS last_updated_date_utc_at_source
-    FROM {source_view}
+        CAST(row_number() OVER (
+            ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
+        ) AS BIGINT)                         AS person_relationship_key,
+        p1.SystemEmployeeCode                AS person_number_1,
+        p1.MemberFirmCode                    AS member_firm_code_1,
+        p2.SystemEmployeeCode                AS person_number_2,
+        p2.MemberFirmCode                    AS member_firm_code_2,
+        rt.RelationshipTypeName              AS relationship_description,
+        pr.PrimaryFlag                       AS primary_flag,
+        CAST(pr.Active AS BOOLEAN)           AS is_active,
+        pr.LastUpdatedDateGMT                AS last_updated_date_utc_at_source
+    FROM {source_view} pr
+    LEFT JOIN {person_lookup_view} p1
+        ON pr.PersonID1 = p1.PersonID
+    LEFT JOIN {person_lookup_view} p2
+        ON pr.PersonID2 = p2.PersonID
+    LEFT JOIN {relationship_type_view} rt
+        ON pr.RelationshipTypeID = rt.RelationshipTypeID
     """)
