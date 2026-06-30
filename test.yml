@@ -1,59 +1,33 @@
-elif source_table == "PersonRelationship":
-    person_lookup_view = "lkp_person_relationship_person"
-    relationship_type_view = "lkp_person_relationship_type"
-
-    # Full Person lookup for PersonID1 / PersonID2
-    df_person_lookup = spark.read.jdbc(
-        url=jdbc_url,
-        table="""
-        (
-            SELECT
-                PersonID,
-                SystemEmployeeCode,
-                MemberFirmCode
-            FROM dbo.Person
-        ) AS src
-        """,
-        properties=connection_properties
-    )
-    df_person_lookup = remove_exact_duplicates(df_person_lookup)
-    df_person_lookup.createOrReplaceTempView(person_lookup_view)
-
-    # Full RelationshipType lookup
-    df_relationship_type_lookup = spark.read.jdbc(
-        url=jdbc_url,
-        table="""
-        (
-            SELECT
-                RelationshipTypeID,
-                RelationshipTypeName
-            FROM dbo.RelationshipType
-        ) AS src
-        """,
-        properties=connection_properties
-    )
-    df_relationship_type_lookup = remove_exact_duplicates(df_relationship_type_lookup)
-    df_relationship_type_lookup.createOrReplaceTempView(relationship_type_view)
-
-    spark.sql(f"""
-    CREATE OR REPLACE TEMP VIEW {target_view} AS
-    SELECT
-        CAST(row_number() OVER (
-            ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
-        ) AS BIGINT)                         AS person_relationship_key,
-        p1.SystemEmployeeCode                AS person_number_1,
-        p1.MemberFirmCode                    AS member_firm_code_1,
-        p2.SystemEmployeeCode                AS person_number_2,
-        p2.MemberFirmCode                    AS member_firm_code_2,
-        rt.RelationshipTypeName              AS relationship_description,
-        pr.PrimaryFlag                       AS primary_flag,
-        CAST(pr.Active AS BOOLEAN)           AS is_active,
-        pr.LastUpdatedDateGMT                AS last_updated_date_utc_at_source
-    FROM {source_view} pr
-    LEFT JOIN {person_lookup_view} p1
-        ON pr.PersonID1 = p1.PersonID
-    LEFT JOIN {person_lookup_view} p2
-        ON pr.PersonID2 = p2.PersonID
-    LEFT JOIN {relationship_type_view} rt
-        ON pr.RelationshipTypeID = rt.RelationshipTypeID
-    """)
+if source_table == "PersonRelationship":
+    source_query = f"""
+    (
+        SELECT
+            CAST(ROW_NUMBER() OVER (
+                ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
+            ) AS BIGINT)                    AS person_relationship_key,
+            p1.SystemEmployeeCode           AS person_number_1,
+            p1.MemberFirmCode               AS member_firm_code_1,
+            p2.SystemEmployeeCode           AS person_number_2,
+            p2.MemberFirmCode               AS member_firm_code_2,
+            rt.RelationshipTypeName         AS relationship_description,
+            pr.PrimaryFlag                  AS primary_flag,
+            pr.Active                       AS is_active,
+            pr.LastUpdatedDateGMT           AS last_updated_date_utc_at_source
+        FROM dbo.PersonRelationship pr
+        LEFT JOIN dbo.Person p1
+            ON pr.PersonID1 = p1.PersonID
+        LEFT JOIN dbo.Person p2
+            ON pr.PersonID2 = p2.PersonID
+        LEFT JOIN dbo.RelationshipType rt
+            ON pr.RelationshipTypeID = rt.RelationshipTypeID
+        WHERE {watermark_filter}
+    ) AS src
+    """
+else:
+    source_query = f"""
+    (
+        SELECT {column_list_sql}
+        FROM {full_source_name}
+        WHERE {watermark_filter}
+    ) AS src
+    """
