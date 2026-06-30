@@ -1,52 +1,39 @@
 {
     "schema_name": "dbo",
-    "source_tables": ["PersonRelationship", "Person", "RelationshipType"],
-    "target_table": "silver_rmdd_relationship_type",
-    "primary_keys": [
-        "person_number_1",
-        "member_firm_code_1",
-        "person_number_2",
-        "member_firm_code_2",
-        "relationship_description"
-    ],
+    "source_tables": ["Person", "PersonSystemMap"],
+    "target_table": "silver_rmdd_person_system_map",
+    "primary_keys": ["person_number", "member_firm_code"],
     "is_incremental": 1,
     "incremental_column": "LastUpdatedDateGMT"
 }
 
 
+    # Map PersonSystemMap.
+    # Person is the main source because person_number and member_firm_code come from Person.
+    # PersonSystemMap is joined to bring system IDs and login fields.
+    elif target_entity == "person_system_map":
+        person_view = f"src_{to_snake_case(source_tables[0])}"
+        person_system_map_view = f"src_{to_snake_case(source_tables[1])}"
 
-    # Map RelationshipType.
-    # This target depends on PersonRelationship, Person, and RelationshipType.
-    elif target_entity == "relationship_type":
-        person_relationship_view = f"src_{to_snake_case(source_tables[0])}"
-        person_view = f"src_{to_snake_case(source_tables[1])}"
-        relationship_type_view = f"src_{to_snake_case(source_tables[2])}"
-
-        # Apply watermark to PersonRelationship because it is the main source.
+        # Apply watermark to Person because it is the main source for this target.
         watermark_filter = "1 = 1"
         if is_incremental == 1 and watermark_col:
-            watermark_filter = f"pr.{watermark_col} > '{prev_wm}' AND pr.{watermark_col} <= '{curr_wm}'"
+            watermark_filter = f"p.{watermark_col} > '{prev_wm}' AND p.{watermark_col} <= '{curr_wm}'"
 
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (
-                ORDER BY pr.PersonID1, pr.PersonID2, pr.RelationshipTypeID
-            ) AS BIGINT)            AS person_relationship_key,
-            p1.SystemEmployeeCode   AS person_number_1,
-            p1.MemberFirmCode       AS member_firm_code_1,
-            p2.SystemEmployeeCode   AS person_number_2,
-            p2.MemberFirmCode       AS member_firm_code_2,
-            rt.RelationshipTypeName AS relationship_description,
-            pr.PrimaryFlag          AS primary_flag,
-            pr.Active               AS is_active,
-            pr.LastUpdatedDateGMT   AS last_updated_date_utc_at_source
-        FROM {person_relationship_view} pr
-        LEFT JOIN {person_view} p1
-            ON pr.PersonID1 = p1.PersonID
-        LEFT JOIN {person_view} p2
-            ON pr.PersonID2 = p2.PersonID
-        LEFT JOIN {relationship_type_view} rt
-            ON pr.RelationshipTypeID = rt.RelationshipTypeID
+            CAST(row_number() OVER (ORDER BY p.PersonID) AS BIGINT) AS personsystemmap_key,
+            LTRIM(RTRIM(p.SystemEmployeeCode)) AS person_number,
+            LTRIM(RTRIM(p.MemberFirmCode))     AS member_firm_code,
+            LTRIM(RTRIM(psm.GPMSExternalPersonID)) AS timekeeper_id,
+            LTRIM(RTRIM(psm.DomainName))       AS domain_name,
+            LTRIM(RTRIM(psm.GPMSExternalPersonID)) AS unified_sap_person_external_id,
+            LTRIM(RTRIM(psm.WindowsLogin))     AS windows_login,
+            LTRIM(RTRIM(psm.DMSSystemID))      AS dms_system_id,
+            LTRIM(RTRIM(psm.HumanResourcesSystemID)) AS human_resources_system_id
+        FROM {person_view} p
+        LEFT JOIN {person_system_map_view} psm
+            ON p.PersonID = psm.PersonID
         WHERE {watermark_filter}
         """)
