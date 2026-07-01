@@ -1,63 +1,114 @@
-location_path = "Files/silver/taxonomy"
+# Framework-compatible parameters with manual fallbacks.
+import json
+import uuid
 
-tbl_properties = """
-TBLPROPERTIES (
-    'delta.autoOptimize.optimizeWrite'     = 'true',
-    'delta.autoOptimize.autoCompact'       = 'true',
-    'delta.logRetentionDuration'           = 'interval 30 days',
-    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
-)
-"""
+# Basic notebook runtime values
+task_id = 50
+task_name = "Load taxonomy to silver"
+lineage_id = str(uuid.uuid4())
+limit_rows_for_debugging = False
 
-tables_definition = [
-    {
-        "table_name": f"{schema_name}_curated_band_level",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            band_level_key                     BIGINT,
-            band_level_code                    STRING,
-            band_level_description             STRING,
-            band_group_code                    STRING,
-            band_group_description             STRING,
-            is_active                          BOOLEAN,
+# Source config
+# source_tables: first table is the main source table
+source_settings = json.dumps({
+    "source_name": "taxonomy",
+    "table_config": [
+        {
+            "schema_name": "external_curated_taxonomy",
+            "source_tables": ["curated_band_level"],
+            "target_table": "silver_taxonomy_curated_band_level",
+            "primary_keys": ["band_level_code"],
+            "is_incremental": 0
+        },
+        {
+            "schema_name": "external_curated_taxonomy",
+            "source_tables": ["curated_bill_type"],
+            "target_table": "silver_taxonomy_curated_bill_type",
+            "primary_keys": ["bill_type_code"],
+            "is_incremental": 0
+        }
+    ]
+})
 
-        --metadata
-            _ingest_time                       TIMESTAMP,
-            _ingest_date                       DATE,
-            _source_file                       STRING,
-            _source_system                     STRING,
-            _table                             STRING,
-            _lineage_id                        STRING,
-            _hashed_pk                         STRING,
-            _hashed_row                        STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_bill_type",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            bill_type_key                      BIGINT,
-            bill_type_code                     STRING,
-            bill_type_description              STRING,
-            is_active                          BOOLEAN,
+# Target config
+target_settings = json.dumps({
+    "lakehouse_name": "lh_canada_global_mds",
+    "schema_name": "silver_taxonomy",
+    "load_strategy": "merge-scd1",
+    "location_root": "Files/silver/taxonomy"
+})
 
-        --metadata
-            _ingest_time                       TIMESTAMP,
-            _ingest_date                       DATE,
-            _source_file                       STRING,
-            _source_system                     STRING,
-            _table                             STRING,
-            _lineage_id                        STRING,
-            _hashed_pk                         STRING,
-            _hashed_row                        STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    }
-]
+
+
+
+
+
+
+# Parse notebook settings
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
+
+# Source configuration
+source_name = source_settings.get("source_name")
+table_config = source_settings.get("table_config", [])
+
+# Target configuration
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema = target_settings.get("schema_name")
+target_load_strategy = target_settings.get("load_strategy", "merge-scd1")
+location_root = target_settings.get("location_root")
+
+# Validation output
+print(source_name)
+print(target_schema)
+display(table_config)
+
+
+
+
+
+
+# Map source views into target shape
+for cfg in table_config:
+    source_tables = cfg.get("source_tables", [])
+    main_source_table = source_tables[0]
+    main_source_view = f"src_{to_snake_case(main_source_table)}"
+
+    target_table = cfg.get("target_table")
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    map_view = f"map_{target_entity}"
+
+    # Map Band Level
+    if target_entity == "curated_band_level":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            CAST(row_number() OVER (ORDER BY s.BandLevelCode) AS BIGINT) AS band_level_key,
+            s.BandLevelCode            AS band_level_code,
+            s.BandLevelDescription     AS band_level_description,
+            s.BandGroupCode            AS band_group_code,
+            s.BandGroupDescription     AS band_group_description,
+            s.Active                   AS is_active
+        FROM {main_source_view} s
+        """)
+
+    # Map Bill Type
+    elif target_entity == "curated_bill_type":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            CAST(row_number() OVER (ORDER BY s.BillTypeCode) AS BIGINT) AS bill_type_key,
+            s.BillTypeCode             AS bill_type_code,
+            s.Description              AS bill_type_description,
+            s.Active                   AS is_active
+        FROM {main_source_view} s
+        """)
+
+    else:
+        raise ValueError(f"No mapping defined for {target_table}")
+
+    # Preview mapped data
+    print(f"Mapped preview for {map_view}")
+    display(spark.table(map_view).limit(3))
