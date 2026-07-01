@@ -1,44 +1,199 @@
-# Map source views into target shape
-for cfg in table_config:
-    source_tables = cfg.get("source_tables", [])
-    main_source_table = source_tables[0]
-    main_source_view = f"src_{to_snake_case(main_source_table)}"
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_client_sector"],
+    "target_table": "silver_taxonomy_curated_client_sector",
+    "primary_keys": ["sic_code", "ibg_code", "ibg_sector_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_company"],
+    "target_table": "silver_taxonomy_curated_company",
+    "primary_keys": ["company_code", "member_firm_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_country"],
+    "target_table": "silver_taxonomy_curated_country",
+    "primary_keys": ["country_code_iso2"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_currency"],
+    "target_table": "silver_taxonomy_curated_currency",
+    "primary_keys": ["currency_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_employee_sub_group"],
+    "target_table": "silver_taxonomy_curated_employee_sub_group",
+    "primary_keys": ["employee_sub_group_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_entry_classification"],
+    "target_table": "silver_taxonomy_curated_entry_classification",
+    "primary_keys": ["entry_classification_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_matter_billing_frequency"],
+    "target_table": "silver_taxonomy_curated_matter_billing_frequency",
+    "primary_keys": ["matter_billing_frequency_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_matter_billing_method"],
+    "target_table": "silver_taxonomy_curated_matter_billing_method",
+    "primary_keys": ["matter_billing_method_code"],
+    "is_incremental": 0
+},
+{
+    "schema_name": "external_curated_taxonomy",
+    "source_tables": ["curated_matter_category"],
+    "target_table": "silver_taxonomy_curated_matter_category",
+    "primary_keys": ["matter_category_code"],
+    "is_incremental": 0
+}
 
-    target_table = cfg.get("target_table")
-    target_prefix = f"{target_schema}_"
-    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
 
-    map_view = f"map_{target_entity}"
 
-    # Map Band Level
-    if target_entity == "curated_band_level":
+
+
+
+
+
+
+    # Map Client Sector
+    elif target_entity == "curated_client_sector":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            band_level_key,
-            band_level_code,
-            band_level_description,
-            band_group_code,
-            band_group_description,
+            client_sector_key,
+            sic_code,
+            ibg_code,
+            ibg_sector_code,
+            sic_code_description,
+            ibg_code_description,
+            ibg_sector_code_description,
+            default_matter_sub_industry_code,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Bill Type
-    elif target_entity == "curated_bill_type":
+    # Map Company
+    elif target_entity == "curated_company":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            bill_type_key,
-            bill_type_code,
-            bill_type_description,
+            company_key,
+            company_code,
+            member_firm_code,
+            company_name,
+            city,
+            country_code_iso2,
+            currency_code,
             is_active
         FROM {main_source_view}
         """)
 
-    else:
-        raise ValueError(f"No mapping defined for {target_table}")
+    # Map Country
+    elif target_entity == "curated_country":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            country_key,
+            country_code_iso2,
+            country_code_iso3,
+            country_code_iso4,
+            country_name,
+            nationality,
+            language_code,
+            currency_code,
+            continent,
+            un_member,
+            is_active
+        FROM {main_source_view}
+        """)
 
-    # Preview mapped data
-    print(f"Mapped preview for {map_view}")
-    display(spark.table(map_view).limit(3))
+    # Map Currency
+    elif target_entity == "curated_currency":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            currency_key,
+            currency_code,
+            iso_no,
+            currency_description,
+            decimals,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Employee Sub Group
+    elif target_entity == "curated_employee_sub_group":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            employee_sub_group_key,
+            employee_sub_group_code,
+            employee_sub_group_description,
+            employee_group_code,
+            employee_group_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Entry Classification
+    elif target_entity == "curated_entry_classification":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            entry_classification_key,
+            entry_classification_code,
+            entry_classification_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Matter Billing Frequency
+    elif target_entity == "curated_matter_billing_frequency":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            matter_billing_frequency_key,
+            matter_billing_frequency_code,
+            matter_billing_frequency_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Matter Billing Method
+    elif target_entity == "curated_matter_billing_method":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            matter_billing_method_key,
+            matter_billing_method_code,
+            matter_billing_method_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Matter Category
+    elif target_entity == "curated_matter_category":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            matter_category_key,
+            matter_category_code,
+            matter_category_description,
+            is_active
+        FROM {main_source_view}
+        """)
