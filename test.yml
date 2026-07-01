@@ -65,7 +65,46 @@ display(table_config)
 
 
 
+# Find every unique source table needed by the target mappings
+source_tables_to_read = {}
 
+for cfg in table_config:
+    source_schema = cfg.get("schema_name")
+    source_tables = cfg.get("source_tables", [])
+
+    if not source_tables:
+        raise ValueError(f"Missing source_tables for {cfg.get('target_table')}")
+
+    for source_table in source_tables:
+        source_view = f"src_{to_snake_case(source_table)}"
+
+        source_tables_to_read[source_view] = {
+            "schema_name": source_schema,
+            "source_table": source_table
+        }
+
+# Read shortcut tables and create src_* temp views
+for source_view, source_cfg in source_tables_to_read.items():
+    source_schema = source_cfg.get("schema_name")
+    source_table = source_cfg.get("source_table")
+    full_source_name = f"{source_schema}.{source_table}"
+
+    # Read source table from lakehouse shortcut
+    df_source = spark.table(full_source_name)
+
+    # Drop exact duplicates only
+    df_source = remove_exact_duplicates(df_source)
+
+    # Create source temp view
+    df_source.createOrReplaceTempView(source_view)
+
+    # Preview source data
+    print(f"Source preview for {source_view} ({full_source_name})")
+    display(df_source.limit(3))
+
+
+
+    
 
 
 # Map source views into target shape
