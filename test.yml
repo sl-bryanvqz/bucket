@@ -1,194 +1,167 @@
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_client_sector"],
-    "target_table": "silver_taxonomy_curated_client_sector",
-    "primary_keys": ["sic_code", "ibg_code", "ibg_sector_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_company"],
-    "target_table": "silver_taxonomy_curated_company",
-    "primary_keys": ["company_code", "member_firm_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_country"],
-    "target_table": "silver_taxonomy_curated_country",
-    "primary_keys": ["country_code_iso2"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_currency"],
-    "target_table": "silver_taxonomy_curated_currency",
-    "primary_keys": ["currency_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_employee_sub_group"],
-    "target_table": "silver_taxonomy_curated_employee_sub_group",
-    "primary_keys": ["employee_sub_group_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_entry_classification"],
-    "target_table": "silver_taxonomy_curated_entry_classification",
-    "primary_keys": ["entry_classification_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_matter_billing_frequency"],
-    "target_table": "silver_taxonomy_curated_matter_billing_frequency",
-    "primary_keys": ["matter_billing_frequency_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_matter_billing_method"],
-    "target_table": "silver_taxonomy_curated_matter_billing_method",
-    "primary_keys": ["matter_billing_method_code"],
-    "is_incremental": 0
-},
-{
-    "schema_name": "external_curated_taxonomy",
-    "source_tables": ["curated_matter_category"],
-    "target_table": "silver_taxonomy_curated_matter_category",
-    "primary_keys": ["matter_category_code"],
-    "is_incremental": 0
-}
+"table_config": [
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_band_level"], "target_table": "silver_taxonomy_curated_band_level", "primary_keys": ["band_level_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_bill_type"], "target_table": "silver_taxonomy_curated_bill_type", "primary_keys": ["bill_type_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_client_sector"], "target_table": "silver_taxonomy_curated_client_sector", "primary_keys": ["sic_code", "ibg_code", "ibg_sector_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_company"], "target_table": "silver_taxonomy_curated_company", "primary_keys": ["company_code", "member_firm_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_country"], "target_table": "silver_taxonomy_curated_country", "primary_keys": ["country_code_iso2"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_currency"], "target_table": "silver_taxonomy_curated_currency", "primary_keys": ["currency_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_employee_sub_group"], "target_table": "silver_taxonomy_curated_employee_sub_group", "primary_keys": ["employee_sub_group_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_entry_classification"], "target_table": "silver_taxonomy_curated_entry_classification", "primary_keys": ["entry_classification_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_billing_frequency"], "target_table": "silver_taxonomy_curated_matter_billing_frequency", "primary_keys": ["matter_billing_frequency_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_billing_method"], "target_table": "silver_taxonomy_curated_matter_billing_method", "primary_keys": ["matter_billing_method_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_category"], "target_table": "silver_taxonomy_curated_matter_category", "primary_keys": ["matter_category_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_entry_type"], "target_table": "silver_taxonomy_curated_matter_entry_type", "primary_keys": ["matter_entry_type_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_sector"], "target_table": "silver_taxonomy_curated_matter_sector", "primary_keys": ["sic_code", "ibg_code", "ibg_sector_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_matter_status"], "target_table": "silver_taxonomy_curated_matter_status", "primary_keys": ["matter_status_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_nature_of_proceeding"], "target_table": "silver_taxonomy_curated_nature_of_proceeding", "primary_keys": ["nature_of_proceeding_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_office"], "target_table": "silver_taxonomy_curated_office", "primary_keys": ["office_code", "member_firm_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_partner_function"], "target_table": "silver_taxonomy_curated_partner_function", "primary_keys": ["partner_function_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_practice_group"], "target_table": "silver_taxonomy_curated_practice_group", "primary_keys": ["practice_group_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_team"], "target_table": "silver_taxonomy_curated_team", "primary_keys": ["team", "member_firm_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_transaction_document_type"], "target_table": "silver_taxonomy_curated_transaction_document_type", "primary_keys": ["transaction_document_type_code"], "is_incremental": 0},
+    {"schema_name": "external_curated_taxonomy", "source_tables": ["curated_work_type"], "target_table": "silver_taxonomy_curated_work_type", "primary_keys": ["technical_area_code", "matter_type_code", "service_area_code"], "is_incremental": 0}
+]
 
 
-
-
-    # Map Client Sector
-    elif target_entity == "curated_client_sector":
+    # Map Matter Sector
+    elif target_entity == "curated_matter_sector":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            client_sector_key,
+            matter_sector_key,
             sic_code,
             ibg_code,
             ibg_sector_code,
             sic_code_description,
             ibg_code_description,
             ibg_sector_code_description,
-            default_matter_sub_industry_code,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Company
-    elif target_entity == "curated_company":
+    # Map Matter Status
+    elif target_entity == "curated_matter_status":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            company_key,
-            company_code,
+            matter_status_key,
+            matter_status_code,
+            matter_status_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Nature Of Proceeding
+    elif target_entity == "curated_nature_of_proceeding":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            nature_of_proceeding_key,
+            nature_of_proceeding_code,
+            nature_of_work_code,
+            nature_of_proceeding_description,
+            nature_of_work_description,
+            is_active
+        FROM {main_source_view}
+        """)
+
+    # Map Office
+    elif target_entity == "curated_office":
+        spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW {map_view} AS
+        SELECT
+            office_key,
+            office_code,
             member_firm_code,
-            company_name,
+            office_id,
+            company_key,
+            office_name,
+            street_1,
+            street_2,
+            street_3,
+            street_4,
+            street_5,
             city,
+            postal_code,
+            region,
             country_code_iso2,
-            currency_code,
+            phone_number,
+            fax_number,
+            office_email_address,
+            po_box,
+            extension_prefix,
+            utc_offset,
+            website_url,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Country
-    elif target_entity == "curated_country":
+    # Map Partner Function
+    elif target_entity == "curated_partner_function":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            country_key,
-            country_code_iso2,
-            country_code_iso3,
-            country_code_iso4,
-            country_name,
-            nationality,
-            language_code,
-            currency_code,
-            continent,
-            un_member,
+            partner_function_key,
+            partner_function_code,
+            sap_code,
+            partner_function_description,
+            partner_function_type,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Currency
-    elif target_entity == "curated_currency":
+    # Map Practice Group
+    elif target_entity == "curated_practice_group":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            currency_key,
-            currency_code,
-            iso_no,
-            currency_description,
-            decimals,
+            practice_group_key,
+            practice_group_code,
+            practice_group_description,
+            practice_group_group,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Employee Sub Group
-    elif target_entity == "curated_employee_sub_group":
+    # Map Team
+    elif target_entity == "curated_team":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            employee_sub_group_key,
-            employee_sub_group_code,
-            employee_sub_group_description,
-            employee_group_code,
-            employee_group_description,
+            team_key,
+            team,
+            member_firm_code,
+            team_id,
+            practice_group_key,
+            team_name,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Entry Classification
-    elif target_entity == "curated_entry_classification":
+    # Map Transaction Document Type
+    elif target_entity == "curated_transaction_document_type":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            entry_classification_key,
-            entry_classification_code,
-            entry_classification_description,
+            transaction_document_type_key,
+            transaction_document_type_code,
+            transaction_document_type_description,
             is_active
         FROM {main_source_view}
         """)
 
-    # Map Matter Billing Frequency
-    elif target_entity == "curated_matter_billing_frequency":
+    # Map Work Type
+    elif target_entity == "curated_work_type":
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            matter_billing_frequency_key,
-            matter_billing_frequency_code,
-            matter_billing_frequency_description,
-            is_active
-        FROM {main_source_view}
-        """)
-
-    # Map Matter Billing Method
-    elif target_entity == "curated_matter_billing_method":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT
-            matter_billing_method_key,
-            matter_billing_method_code,
-            matter_billing_method_description,
-            is_active
-        FROM {main_source_view}
-        """)
-
-    # Map Matter Category
-    elif target_entity == "curated_matter_category":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT
-            matter_category_key,
-            matter_category_code,
-            matter_category_description,
+            work_type_key,
+            technical_area_code,
+            matter_type_code,
+            service_area_code,
+            technical_area_description,
+            matter_type_description,
+            service_area_description,
             is_active
         FROM {main_source_view}
         """)
