@@ -1,186 +1,589 @@
-# Map source views into target shape
-# This is the only cell that contains business mapping and joins
-for cfg in table_config:
-    source_tables = cfg.get("source_tables", [])
-    main_source_table = source_tables[0]
-    main_source_view = f"src_{to_snake_case(main_source_table)}"
+schema_name = "silver_taxonomy"
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
 
-    target_table = cfg.get("target_table")
-    target_prefix = f"{target_schema}_"
-    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+location_path = "Files/silver/taxonomy"
 
-    map_view = f"map_{target_entity}"
+tbl_properties = """
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite'     = 'true',
+    'delta.autoOptimize.autoCompact'       = 'true',
+    'delta.logRetentionDuration'           = 'interval 30 days',
+    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
+)
+"""
 
-    # Map Band Level
-    if target_entity == "curated_band_level":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT band_level_key, band_level_code, band_level_description, band_group_code, band_group_description, is_active
-        FROM {main_source_view}
-        """)
+tables_definition = [
+    {
+        "table_name": f"{schema_name}_curated_band_level",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            band_level_key BIGINT,
+            band_level_code STRING,
+            band_level_description STRING,
+            band_group_code STRING,
+            band_group_description STRING,
+            is_active BOOLEAN,
 
-    # Map Bill Type
-    elif target_entity == "curated_bill_type":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT bill_type_key, bill_type_code, bill_type_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_bill_type",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            bill_type_key BIGINT,
+            bill_type_code STRING,
+            bill_type_description STRING,
+            is_active BOOLEAN,
 
-    # Map Client Sector
-    elif target_entity == "curated_client_sector":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT client_sector_key, sic_code, ibg_code, ibg_sector_code, sic_code_description, ibg_code_description, ibg_sector_code_description, default_matter_sub_industry_code, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_client_sector",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            client_sector_key BIGINT,
+            sic_code STRING,
+            ibg_code STRING,
+            ibg_sector_code STRING,
+            sic_code_description STRING,
+            ibg_code_description STRING,
+            ibg_sector_code_description STRING,
+            default_matter_sub_industry_code STRING,
+            is_active BOOLEAN,
 
-    # Map Company
-    elif target_entity == "curated_company":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT company_key, company_code, member_firm_code, company_name, city, country_code_iso2, currency_code, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_company",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            company_key BIGINT,
+            company_code STRING,
+            member_firm_code STRING,
+            company_name STRING,
+            city STRING,
+            country_code_iso2 STRING,
+            currency_code STRING,
+            is_active BOOLEAN,
 
-    # Map Country
-    elif target_entity == "curated_country":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT country_key, country_code_iso2, country_code_iso3, country_code_iso4, country_name, nationality, language_code, currency_code, continent, un_member, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_country",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            country_key BIGINT,
+            country_code_iso2 STRING,
+            country_code_iso3 STRING,
+            country_code_iso4 STRING,
+            country_name STRING,
+            nationality STRING,
+            language_code STRING,
+            currency_code STRING,
+            continent STRING,
+            un_member BOOLEAN,
+            is_active BOOLEAN,
 
-    # Map Currency
-    elif target_entity == "curated_currency":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT currency_key, currency_code, iso_no, currency_description, decimals, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_currency",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            currency_key BIGINT,
+            currency_code STRING,
+            iso_no STRING,
+            currency_description STRING,
+            decimals INT,
+            is_active BOOLEAN,
 
-    # Map Employee Sub Group
-    elif target_entity == "curated_employee_sub_group":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT employee_sub_group_key, employee_sub_group_code, employee_sub_group_description, employee_group_code, employee_group_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_employee_sub_group",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            employee_sub_group_key BIGINT,
+            employee_sub_group_code STRING,
+            employee_sub_group_description STRING,
+            employee_group_code STRING,
+            employee_group_description STRING,
+            is_active BOOLEAN,
 
-    # Map Entry Classification
-    elif target_entity == "curated_entry_classification":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT entry_classification_key, entry_classification_code, entry_classification_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_entry_classification",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            entry_classification_key BIGINT,
+            entry_classification_code STRING,
+            entry_classification_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Billing Frequency
-    elif target_entity == "curated_matter_billing_frequency":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_billing_frequency_key, matter_billing_frequency_code, matter_billing_frequency_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_billing_frequency",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_billing_frequency_key BIGINT,
+            matter_billing_frequency_code STRING,
+            matter_billing_frequency_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Billing Method
-    elif target_entity == "curated_matter_billing_method":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_billing_method_key, matter_billing_method_code, matter_billing_method_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_billing_method",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_billing_method_key BIGINT,
+            matter_billing_method_code STRING,
+            matter_billing_method_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Category
-    elif target_entity == "curated_matter_category":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_category_key, matter_category_code, matter_category_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_category",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_category_key BIGINT,
+            matter_category_code INT,
+            matter_category_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Entry Type
-    elif target_entity == "curated_matter_entry_type":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_entry_type_key, matter_entry_type_code, matter_entry_type_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_entry_type",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_entry_type_key BIGINT,
+            matter_entry_type_code STRING,
+            matter_entry_type_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Sector
-    elif target_entity == "curated_matter_sector":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_sector_key, sic_code, ibg_code, ibg_sector_code, sic_code_description, ibg_code_description, ibg_sector_code_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_sector",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_sector_key BIGINT,
+            sic_code STRING,
+            ibg_code STRING,
+            ibg_sector_code STRING,
+            sic_code_description STRING,
+            ibg_code_description STRING,
+            ibg_sector_code_description STRING,
+            is_active BOOLEAN,
 
-    # Map Matter Status
-    elif target_entity == "curated_matter_status":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT matter_status_key, matter_status_code, matter_status_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_matter_status",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            matter_status_key BIGINT,
+            matter_status_code STRING,
+            matter_status_description STRING,
+            is_active BOOLEAN,
 
-    # Map Nature Of Proceeding
-    elif target_entity == "curated_nature_of_proceeding":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT nature_of_proceeding_key, nature_of_proceeding_code, nature_of_work_code, nature_of_proceeding_description, nature_of_work_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_nature_of_proceeding",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            nature_of_proceeding_key BIGINT,
+            nature_of_proceeding_code STRING,
+            nature_of_work_code STRING,
+            nature_of_proceeding_description STRING,
+            nature_of_work_description STRING,
+            is_active BOOLEAN,
 
-    # Map Office
-    elif target_entity == "curated_office":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT office_key, office_code, member_firm_code, office_id, company_key, office_name, street_1, street_2, street_3, street_4, street_5, city, postal_code, region, country_code_iso2, phone_number, fax_number, office_email_address, po_box, extension_prefix, utc_offset, website_url, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_office",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            office_key BIGINT,
+            office_code STRING,
+            member_firm_code STRING,
+            office_id INT,
+            company_key BIGINT,
+            office_name STRING,
+            street_1 STRING,
+            street_2 STRING,
+            street_3 STRING,
+            street_4 STRING,
+            street_5 STRING,
+            city STRING,
+            postal_code STRING,
+            region STRING,
+            country_code_iso2 STRING,
+            phone_number STRING,
+            fax_number STRING,
+            office_email_address STRING,
+            po_box STRING,
+            extension_prefix STRING,
+            utc_offset STRING,
+            website_url STRING,
+            is_active BOOLEAN,
 
-    # Map Partner Function
-    elif target_entity == "curated_partner_function":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT partner_function_key, partner_function_code, sap_code, partner_function_description, partner_function_type, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_partner_function",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            partner_function_key BIGINT,
+            partner_function_code STRING,
+            sap_code STRING,
+            partner_function_description STRING,
+            partner_function_type STRING,
+            is_active BOOLEAN,
 
-    # Map Practice Group
-    elif target_entity == "curated_practice_group":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT practice_group_key, practice_group_code, practice_group_description, practice_group_group, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_practice_group",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            practice_group_key BIGINT,
+            practice_group_code STRING,
+            practice_group_description STRING,
+            practice_group_group STRING,
+            is_active BOOLEAN,
 
-    # Map Team
-    elif target_entity == "curated_team":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT team_key, team, member_firm_code, team_id, practice_group_key, team_name, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_team",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            team_key BIGINT,
+            team STRING,
+            member_firm_code STRING,
+            team_id INT,
+            practice_group_key BIGINT,
+            team_name STRING,
+            is_active BOOLEAN,
 
-    # Map Transaction Document Type
-    elif target_entity == "curated_transaction_document_type":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT transaction_document_type_key, transaction_document_type_code, transaction_document_type_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_transaction_document_type",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            transaction_document_type_key BIGINT,
+            transaction_document_type_code STRING,
+            transaction_document_type_description STRING,
+            is_active BOOLEAN,
 
-    # Map Work Type
-    elif target_entity == "curated_work_type":
-        spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW {map_view} AS
-        SELECT work_type_key, technical_area_code, matter_type_code, service_area_code, technical_area_description, matter_type_description, service_area_description, is_active
-        FROM {main_source_view}
-        """)
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_work_type",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            work_type_key BIGINT,
+            technical_area_code STRING,
+            matter_type_code STRING,
+            service_area_code STRING,
+            technical_area_description STRING,
+            matter_type_description STRING,
+            service_area_description STRING,
+            is_active BOOLEAN,
 
-    else:
-        raise ValueError(f"No taxonomy mapping defined for {target_table}")
+            --metadata
+            _ingest_time TIMESTAMP,
+            _ingest_date DATE,
+            _source_file STRING,
+            _source_system STRING,
+            _table STRING,
+            _lineage_id STRING,
+            _hashed_pk STRING,
+            _hashed_row STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    }
+]
 
-    print(f"Mapped preview for {map_view}")
-    display(spark.table(map_view).limit(3))
+for table in tables_definition:
+    table_name = table["table_name"]
+
+    spark.sql(table["sql_statement"].format(
+        schema_name=schema_name,
+        table_name=table_name,
+        location_path=location_path,
+        tbl_properties=tbl_properties
+    ))
+
+    print(f"Created or validated {schema_name}.{table_name}")
