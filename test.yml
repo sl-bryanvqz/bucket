@@ -3,41 +3,22 @@ def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
 
     # Create target path if this is the first load
     if not DeltaTable.isDeltaTable(spark, target_table_path):
-        rows_inserted = source_df_cleaned.count()
+        rows_read = source_df_cleaned.count()
         source_df_cleaned.write.format("delta").mode("overwrite").save(target_table_path)
 
         return {
-            "rows_inserted": rows_inserted,
+            "rows_inserted": rows_read,
             "rows_updated": 0,
-            "rows_affected": rows_inserted,
+            "rows_read": rows_read,
+            "rows_copied": rows_read,
             "merge_skipped": False
         }
 
     # Get existing target table
     delta_table = DeltaTable.forPath(spark, target_table_path)
 
-    # Merge SCD1: insert new rows and update only changed rows
+    # Merge SCD1: update only when _hashed_row changed
     if target_load_strategy == "merge-scd1":
-        target_df = delta_table.toDF().select("_hashed_pk", "_hashed_row")
-        source_df = source_df_cleaned.select("_hashed_pk", "_hashed_row")
-
-        rows_to_insert = source_df.join(target_df, "_hashed_pk", "left_anti").count()
-
-        rows_to_update = (
-            source_df.alias("s")
-            .join(target_df.alias("t"), "_hashed_pk", "inner")
-            .filter("NOT (t._hashed_row <=> s._hashed_row)")
-            .count()
-        )
-
-        if rows_to_insert == 0 and rows_to_update == 0:
-            return {
-                "rows_inserted": 0,
-                "rows_updated": 0,
-                "rows_affected": 0,
-                "merge_skipped": True
-            }
-
         (
             delta_table.alias("t")
             .merge(source_df_cleaned.alias("s"), "t._hashed_pk = s._hashed_pk")
@@ -46,16 +27,27 @@ def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
             .execute()
         )
 
+        operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
+
+        rows_inserted = int(operation_metrics.get("numTargetRowsInserted", 0))
+        rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
+        rows_read = int(operation_metrics.get("numSourceRows", 0))
+        rows_copied = rows_inserted + rows_updated
+
+        if rows_inserted == 0 and rows_updated == 0:
+            print(f"Skipping {target_table_path}: no changes")
+
         return {
-            "rows_inserted": rows_to_insert,
-            "rows_updated": rows_to_update,
-            "rows_affected": rows_to_insert + rows_to_update,
-            "merge_skipped": False
+            "rows_inserted": rows_inserted,
+            "rows_updated": rows_updated,
+            "rows_read": rows_read,
+            "rows_copied": rows_copied,
+            "merge_skipped": rows_inserted == 0 and rows_updated == 0
         }
 
     # Overwrite target table
     if target_load_strategy == "overwrite":
-        rows_inserted = source_df_cleaned.count()
+        rows_read = source_df_cleaned.count()
 
         (
             source_df_cleaned
@@ -67,15 +59,16 @@ def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
         )
 
         return {
-            "rows_inserted": rows_inserted,
+            "rows_inserted": rows_read,
             "rows_updated": 0,
-            "rows_affected": rows_inserted,
+            "rows_read": rows_read,
+            "rows_copied": rows_read,
             "merge_skipped": False
         }
 
     # Append to target table
     if target_load_strategy == "append":
-        rows_inserted = source_df_cleaned.count()
+        rows_read = source_df_cleaned.count()
 
         (
             source_df_cleaned
@@ -87,11 +80,52 @@ def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
         )
 
         return {
-            "rows_inserted": rows_inserted,
+            "rows_inserted": rows_read,
             "rows_updated": 0,
-            "rows_affected": rows_inserted,
+            "rows_read": rows_read,
+            "rows_copied": rows_read,
             "merge_skipped": False
         }
 
     # Stop if strategy is not supported
     raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
+
+
+
+
+
+
+
+# Merge final temp views into existing target silver tables
+load_results = []
+
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    target_view = f"tgt_{target_entity}"
+    target_table_path = f"{location_root}/{target_table}"
+    full_target_name = f"{target_schema}.{target_table}"
+
+    # Load target table
+    df_target = spark.table(target_view)
+    result = load_to_target(df_target, target_table_path, target_load_strategy)
+    load_results.append(result)
+
+    # Print table result only when rows changed
+    if not result["merge_skipped"]:
+        print(full_target_name)
+        print(f"rows_inserted: {result['rows_inserted']}")
+        print(f"rows_updated: {result['rows_updated']}")
+
+# Return metrics to pipeline
+result = {
+    "rows_inserted": sum(item["rows_inserted"] for item in load_results),
+    "rows_updated": sum(item["rows_updated"] for item in load_results),
+    "rows_read": sum(item["rows_read"] for item in load_results),
+    "rows_copied": sum(item["rows_copied"] for item in load_results)
+}
+
+notebookutils.notebook.exit(result)
