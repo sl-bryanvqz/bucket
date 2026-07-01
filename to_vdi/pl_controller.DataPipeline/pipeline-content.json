@@ -1,0 +1,371 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "Loop through each stage",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "Set current_watermark_datetime",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Queue tasks before executing",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@pipeline().parameters.tasks_to_execute",
+            "type": "Expression"
+          },
+          "isSequential": true,
+          "activities": [
+            {
+              "name": "Execute tasks in stage",
+              "type": "InvokePipeline",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "waitOnCompletion": true,
+                "operationType": "InvokeFabricPipeline",
+                "pipelineId": {
+                  "value": "@pipeline().libraryVariables.vl_guids_pl_stage_executor_id",
+                  "type": "Expression"
+                },
+                "workspaceId": {
+                  "value": "@pipeline().DataFactory",
+                  "type": "Expression"
+                },
+                "parameters": {
+                  "users_to_notify": {
+                    "value": "@pipeline().parameters.users_to_notify",
+                    "type": "Expression"
+                  },
+                  "limit_rows_for_debugging": {
+                    "value": "@pipeline().parameters.limit_rows_for_debugging",
+                    "type": "Expression"
+                  },
+                  "tasks_to_execute": {
+                    "value": "@item().task_ids_in_stage",
+                    "type": "Expression"
+                  },
+                  "current_watermark_datetime": {
+                    "value": "@variables('current_watermark_datetime')",
+                    "type": "Expression"
+                  },
+                  "parent_run_id": {
+                    "value": "@pipeline().RunId",
+                    "type": "Expression"
+                  }
+                }
+              },
+              "externalReferences": {
+                "connection": "@pipeline().libraryVariables.vl_guids_fabric_pipeline_connection_id"
+              }
+            },
+            {
+              "name": "Clear queue after stage execution",
+              "description": "Clears the queue only for the tasks in this particular stage",
+              "type": "SqlServerStoredProcedure",
+              "dependsOn": [
+                {
+                  "activity": "Execute tasks in stage",
+                  "dependencyConditions": [
+                    "Completed"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "storedProcedureName": "[logging].[usp_clear_queued_tasks]",
+                "storedProcedureParameters": {
+                  "parent_run_id": {
+                    "value": {
+                      "value": "@pipeline().RunId",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "task_ids_in_stage": {
+                    "value": "@item().task_ids_in_stage",
+                    "type": "String"
+                  }
+                }
+              },
+              "connectionSettings": {
+                "name": "5fd505b0_ce1a_44c9_a608_2763d14330c8",
+                "properties": {
+                  "annotations": [],
+                  "type": "FabricSqlDatabase",
+                  "typeProperties": {
+                    "workspaceId": "@pipeline().DataFactory",
+                    "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+                  },
+                  "externalReferences": {
+                    "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Set current_watermark_datetime",
+        "description": "Set current_watermark_datetime with the UTC-now value",
+        "type": "SetVariable",
+        "dependsOn": [],
+        "policy": {
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "variableName": "current_watermark_datetime",
+          "value": {
+            "value": "@formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd HH:mm:ss.fff')",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "Queue tasks before executing",
+        "description": "Put the tasks into a queue, to ensure it is not picked up by the next execution of pl_scheduler",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "storedProcedureName": "[logging].[usp_put_tasks_in_queue]",
+          "storedProcedureParameters": {
+            "tasks_to_execute_json": {
+              "value": {
+                "value": "@string(pipeline().parameters.tasks_to_execute)",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "parent_run_id": {
+              "value": {
+                "value": "@pipeline().RunId",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        },
+        "connectionSettings": {
+          "name": "5fd505b0_ce1a_44c9_a608_2763d14330c8",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "@pipeline().DataFactory",
+              "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+            },
+            "externalReferences": {
+              "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+            }
+          }
+        }
+      },
+      {
+        "name": "Clear entire queue after execution",
+        "description": "Clears the queue after completion, status of pipeline is irrelevant at this stage - the queue must simply be cleared",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "Loop through each stage",
+            "dependencyConditions": [
+              "Completed"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:10:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "storedProcedureName": "[logging].[usp_clear_queued_tasks]",
+          "storedProcedureParameters": {
+            "parent_run_id": {
+              "value": {
+                "value": "@pipeline().RunId",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        },
+        "connectionSettings": {
+          "name": "5fd505b0_ce1a_44c9_a608_2763d14330c8",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "@pipeline().DataFactory",
+              "artifactId": "@pipeline().libraryVariables.vl_guids_metadata_control_db_id"
+            },
+            "externalReferences": {
+              "connection": "@pipeline().libraryVariables.vl_guids_metadata_control_db_connection_id"
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "limit_rows_for_debugging": {
+        "type": "bool",
+        "defaultValue": false
+      },
+      "users_to_notify": {
+        "type": "string",
+        "defaultValue": ""
+      },
+      "tasks_to_execute": {
+        "type": "array",
+        "defaultValue": [
+          {
+            "stage": 1,
+            "task_ids_in_stage": "1,4"
+          },
+          {
+            "stage": 2,
+            "task_ids_in_stage": "5,2,8"
+          },
+          {
+            "stage": 3,
+            "task_ids_in_stage": "3,6"
+          }
+        ]
+      }
+    },
+    "variables": {
+      "current_watermark_datetime": {
+        "type": "String"
+      },
+      "tasks_to_queue_temp": {
+        "type": "String"
+      },
+      "tasks_to_queue": {
+        "type": "String"
+      }
+    },
+    "libraryVariables": {
+      "vl_guids_metadata_control_db_database": {
+        "type": "String",
+        "variableName": "metadata_control_db_database",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_server": {
+        "type": "String",
+        "variableName": "metadata_control_db_server",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_bronze_workspace_id": {
+        "type": "String",
+        "variableName": "bronze_workspace_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_metadata_control_db_connection_id": {
+        "type": "String",
+        "variableName": "metadata_control_db_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_fabric_sql_database_connection_id": {
+        "type": "String",
+        "variableName": "fabric_sql_database_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_bronze_lakehouse_id": {
+        "type": "String",
+        "variableName": "bronze_lakehouse_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_silver_workspace_id": {
+        "type": "String",
+        "variableName": "silver_workspace_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_silver_lakehouse_id": {
+        "type": "String",
+        "variableName": "silver_lakehouse_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_authentication_akv_uri": {
+        "type": "String",
+        "variableName": "akv_uri",
+        "libraryName": "vl_authentication"
+      },
+      "vl_authentication_tenant_id_secret_name": {
+        "type": "String",
+        "variableName": "tenant_id_secret_name",
+        "libraryName": "vl_authentication"
+      },
+      "vl_authentication_client_id_secret_name": {
+        "type": "String",
+        "variableName": "client_id_secret_name",
+        "libraryName": "vl_authentication"
+      },
+      "vl_authentication_client_secret_name": {
+        "type": "String",
+        "variableName": "client_secret_name",
+        "libraryName": "vl_authentication"
+      },
+      "vl_guids_fabric_pipeline_connection_id": {
+        "type": "String",
+        "variableName": "fabric_pipeline_connection_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_pl_worker_id": {
+        "type": "String",
+        "variableName": "pl_worker_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_guids_pl_send_email_id": {
+        "type": "String",
+        "variableName": "pl_send_email_id",
+        "libraryName": "vl_guids"
+      },
+      "vl_runtime_workspace_name": {
+        "type": "String",
+        "variableName": "workspace_name",
+        "libraryName": "vl_runtime"
+      },
+      "vl_guids_pl_stage_executor_id": {
+        "type": "String",
+        "variableName": "pl_stage_executor_id",
+        "libraryName": "vl_guids"
+      }
+    }
+  }
+}
