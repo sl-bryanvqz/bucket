@@ -1,112 +1,3 @@
-# Framework-compatible parameters with manual fallbacks.
-import json
-import uuid
-
-# Basic notebook runtime values
-task_id = 50
-task_name = "Load taxonomy to silver"
-lineage_id = str(uuid.uuid4())
-limit_rows_for_debugging = False
-
-# Source config
-# source_tables: first table is the main source table
-source_settings = json.dumps({
-    "source_name": "taxonomy",
-    "table_config": [
-        {
-            "schema_name": "external_curated_taxonomy",
-            "source_tables": ["curated_band_level"],
-            "target_table": "silver_taxonomy_curated_band_level",
-            "primary_keys": ["band_level_code"],
-            "is_incremental": 0
-        },
-        {
-            "schema_name": "external_curated_taxonomy",
-            "source_tables": ["curated_bill_type"],
-            "target_table": "silver_taxonomy_curated_bill_type",
-            "primary_keys": ["bill_type_code"],
-            "is_incremental": 0
-        }
-    ]
-})
-
-# Target config
-target_settings = json.dumps({
-    "lakehouse_name": "lh_canada_global_mds",
-    "schema_name": "silver_taxonomy",
-    "load_strategy": "merge-scd1",
-    "location_root": "Files/silver/taxonomy"
-})
-
-
-
-
-
-
-
-# Parse notebook settings
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
-
-# Source configuration
-source_name = source_settings.get("source_name")
-table_config = source_settings.get("table_config", [])
-
-# Target configuration
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema = target_settings.get("schema_name")
-target_load_strategy = target_settings.get("load_strategy", "merge-scd1")
-location_root = target_settings.get("location_root")
-
-# Validation output
-print(source_name)
-print(target_schema)
-display(table_config)
-
-
-
-# Find every unique source table needed by the target mappings
-source_tables_to_read = {}
-
-for cfg in table_config:
-    source_schema = cfg.get("schema_name")
-    source_tables = cfg.get("source_tables", [])
-
-    if not source_tables:
-        raise ValueError(f"Missing source_tables for {cfg.get('target_table')}")
-
-    for source_table in source_tables:
-        source_view = f"src_{to_snake_case(source_table)}"
-
-        source_tables_to_read[source_view] = {
-            "schema_name": source_schema,
-            "source_table": source_table
-        }
-
-# Read shortcut tables and create src_* temp views
-for source_view, source_cfg in source_tables_to_read.items():
-    source_schema = source_cfg.get("schema_name")
-    source_table = source_cfg.get("source_table")
-    full_source_name = f"{source_schema}.{source_table}"
-
-    # Read source table from lakehouse shortcut
-    df_source = spark.table(full_source_name)
-
-    # Drop exact duplicates only
-    df_source = remove_exact_duplicates(df_source)
-
-    # Create source temp view
-    df_source.createOrReplaceTempView(source_view)
-
-    # Preview source data
-    print(f"Source preview for {source_view} ({full_source_name})")
-    display(df_source.limit(3))
-
-
-
-    
-
-
 # Map source views into target shape
 for cfg in table_config:
     source_tables = cfg.get("source_tables", [])
@@ -124,13 +15,13 @@ for cfg in table_config:
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (ORDER BY s.BandLevelCode) AS BIGINT) AS band_level_key,
-            s.BandLevelCode            AS band_level_code,
-            s.BandLevelDescription     AS band_level_description,
-            s.BandGroupCode            AS band_group_code,
-            s.BandGroupDescription     AS band_group_description,
-            s.Active                   AS is_active
-        FROM {main_source_view} s
+            band_level_key,
+            band_level_code,
+            band_level_description,
+            band_group_code,
+            band_group_description,
+            is_active
+        FROM {main_source_view}
         """)
 
     # Map Bill Type
@@ -138,11 +29,11 @@ for cfg in table_config:
         spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW {map_view} AS
         SELECT
-            CAST(row_number() OVER (ORDER BY s.BillTypeCode) AS BIGINT) AS bill_type_key,
-            s.BillTypeCode             AS bill_type_code,
-            s.Description              AS bill_type_description,
-            s.Active                   AS is_active
-        FROM {main_source_view} s
+            bill_type_key,
+            bill_type_code,
+            bill_type_description,
+            is_active
+        FROM {main_source_view}
         """)
 
     else:
