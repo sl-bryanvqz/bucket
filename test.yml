@@ -1,79 +1,81 @@
-#2. Framework-aligned target load helper. > nb_load_to_silver: nb_load_to_silver
-#   merge-scd1 updates only when the business row hash changes
+# Load dataframe into target Delta table
 def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
-    # If the target table path does not exist yet, create it.
+
+    # Create target path if this is the first load
     if not DeltaTable.isDeltaTable(spark, target_table_path):
-        logger.info(f'Writing new table to {target_table_path}')
-        source_df_cleaned.write.format('delta').mode("overwrite").save(target_table_path)
+        rows_inserted = source_df_cleaned.count()
+        source_df_cleaned.write.format("delta").mode("overwrite").save(target_table_path)
 
-    else:
-        match target_load_strategy:
-            case 'merge-scd1':
-                logger.info(f'Running merge-scd1 into {target_table_path}')
-                delta_table = DeltaTable.forPath(spark, target_table_path)
+        return {
+            "rows_inserted": rows_inserted,
+            "rows_updated": 0,
+            "rows_affected": rows_inserted,
+            "merge_skipped": False
+        }
 
-                (
-                    delta_table.alias("t").merge(
-                        source_df_cleaned.alias("s"),
-                        "t._hashed_pk = s._hashed_pk"
-                    )
-                    .whenMatchedUpdateAll(
-                        condition="NOT (t._hashed_row <=> s._hashed_row)"
-                    )
-                    .whenNotMatchedInsertAll()
-                    .execute()
-                )
-
-            case 'overwrite':
-                logger.info(f'Overwriting records in {target_table_path}')
-                (
-                    source_df_cleaned
-                    .write.mode("overwrite")
-                    .format("delta")
-                    .option("overwriteSchema", "true")
-                    .save(target_table_path)
-                )
-
-            case 'append':
-                logger.info(f'Appending new records to {target_table_path}')
-                (
-                    source_df_cleaned
-                    .write.mode("append")
-                    .format("delta")
-                    .option("mergeSchema", "true")
-                    .save(target_table_path)
-                )
-
-            case _:
-                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
-
-
-
-
-# Merge final temp views into existing target silver tables
-for cfg in table_config:
-    target_table = cfg.get("target_table")
-
-    target_prefix = f"{target_schema}_"
-    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
-
-    target_view = f"tgt_{target_entity}"
-    target_table_path = f"{location_root}/{target_table}"
-    full_target_name = f"{target_schema}.{target_table}"
-
-    # Load target table
-    df_target = spark.table(target_view)
-    load_to_target(df_target, target_table_path, target_load_strategy)
-
-    # Print latest load metrics
+    # Get existing target table
     delta_table = DeltaTable.forPath(spark, target_table_path)
-    operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
 
-    rows_inserted = int(operation_metrics.get("numTargetRowsInserted", 0))
-    rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
-    rows_affected = rows_inserted + rows_updated
+    # Merge SCD1: insert new rows and update only changed rows
+    if target_load_strategy == "merge-scd1":
+        target_df = delta_table.toDF().select("_hashed_pk", "_hashed_row")
+        source_df = source_df_cleaned.select("_hashed_pk", "_hashed_row")
 
-    print(full_target_name)
-    print(f"rows_inserted: {rows_inserted}")
-    print(f"rows_updated: {rows_updated}")
-    print(f"rows_affected: {rows_affected}")
+        rows_to_insert = source_df.join(target_df, "_hashed_pk", "left_anti").count()
+
+        rows_to_update = (
+            source_df.alias("s")
+            .join(target_df.alias("t"), "_hashed_pk", "inner")
+            .filter("NOT (t._hashed_row <=> s._hashed_row)")
+            .count()
+        )
+
+        if rows_to_insert == 0 and rows_to_update == 0:
+            return {
+                "rows_inserted": 0,
+                "rows_updated": 0,
+                "rows_affected": 0,
+                "merge_skipped": True
+            }
+
+        (
+            delta_table.alias("t")
+            .merge(source_df_cleaned.alias("s"), "t._hashed_pk = s._hashed_pk")
+            .whenMatchedUpdateAll(condition="NOT (t._hashed_row <=> s._hashed_row)")
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+
+        return {
+            "rows_inserted": rows_to_insert,
+            "rows_updated": rows_to_update,
+            "rows_affected": rows_to_insert + rows_to_update,
+            "merge_skipped": False
+        }
+
+    # Overwrite target table
+    if target_load_strategy == "overwrite":
+        rows_inserted = source_df_cleaned.count()
+        source_df_cleaned.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(target_table_path)
+
+        return {
+            "rows_inserted": rows_inserted,
+            "rows_updated": 0,
+            "rows_affected": rows_inserted,
+            "merge_skipped": False
+        }
+
+    # Append to target table
+    if target_load_strategy == "append":
+        rows_inserted = source_df_cleaned.count()
+        source_df_cleaned.write.format("delta").mode("append").option("mergeSchema", "true").save(target_table_path)
+
+        return {
+            "rows_inserted": rows_inserted,
+            "rows_updated": 0,
+            "rows_affected": rows_inserted,
+            "merge_skipped": False
+        }
+
+    # Stop if strategy is not supported
+    raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
