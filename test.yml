@@ -1,5 +1,42 @@
+# Merge final temp views into existing target silver tables
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+
+    target_prefix = f"{target_schema}_"
+    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
+
+    target_view = f"tgt_{target_entity}"
+    target_table_path = f"{location_root}/{target_table}"
+    full_target_name = f"{target_schema}.{target_table}"
+
+    # Load target table and get metrics from load_to_target
+    df_target = spark.table(target_view)
+    result = load_to_target(df_target, target_table_path, target_load_strategy)
+
+    # Print load result
+    print(full_target_name)
+    print(f"rows_inserted: {result['rows_inserted']}")
+    print(f"rows_updated: {result['rows_updated']}")
+    print(f"rows_affected: {result['rows_affected']}")
+    print(f"merge_skipped: {result['merge_skipped']}")
+
+
+
+
 # Load dataframe into target Delta table
 def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
+
+    # Stop if source has duplicate merge keys
+    duplicate_keys = (
+        source_df_cleaned
+        .groupBy("_hashed_pk")
+        .count()
+        .filter("count > 1")
+    )
+
+    if duplicate_keys.limit(1).count() > 0:
+        display(duplicate_keys.limit(10))
+        raise ValueError("Source has duplicate _hashed_pk values. Fix primary_keys or source mapping before merge.")
 
     # Create target path if this is the first load
     if not DeltaTable.isDeltaTable(spark, target_table_path):
@@ -50,30 +87,6 @@ def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
             "rows_inserted": rows_to_insert,
             "rows_updated": rows_to_update,
             "rows_affected": rows_to_insert + rows_to_update,
-            "merge_skipped": False
-        }
-
-    # Overwrite target table
-    if target_load_strategy == "overwrite":
-        rows_inserted = source_df_cleaned.count()
-        source_df_cleaned.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(target_table_path)
-
-        return {
-            "rows_inserted": rows_inserted,
-            "rows_updated": 0,
-            "rows_affected": rows_inserted,
-            "merge_skipped": False
-        }
-
-    # Append to target table
-    if target_load_strategy == "append":
-        rows_inserted = source_df_cleaned.count()
-        source_df_cleaned.write.format("delta").mode("append").option("mergeSchema", "true").save(target_table_path)
-
-        return {
-            "rows_inserted": rows_inserted,
-            "rows_updated": 0,
-            "rows_affected": rows_inserted,
             "merge_skipped": False
         }
 
