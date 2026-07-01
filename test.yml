@@ -1,103 +1,63 @@
-def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
+location_path = "Files/silver/taxonomy"
 
-    # If target path does not exist, create it
-    if not DeltaTable.isDeltaTable(spark, target_table_path):
-        logger.info(f'Writing new table to {target_table_path}')
-        source_df_cleaned.write.format("delta").mode("overwrite").save(target_table_path)
+tbl_properties = """
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite'     = 'true',
+    'delta.autoOptimize.autoCompact'       = 'true',
+    'delta.logRetentionDuration'           = 'interval 30 days',
+    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
+)
+"""
 
-    else:
-        match target_load_strategy:
+tables_definition = [
+    {
+        "table_name": f"{schema_name}_curated_band_level",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            band_level_key                     BIGINT,
+            band_level_code                    STRING,
+            band_level_description             STRING,
+            band_group_code                    STRING,
+            band_group_description             STRING,
+            is_active                          BOOLEAN,
 
-            # Insert new _hashed_pk rows and update changed _hashed_row rows
-            case "merge-scd1":
-                logger.info(f'Running merge-scd1 into {target_table_path}')
-                delta_table = DeltaTable.forPath(spark, target_table_path)
+        --metadata
+            _ingest_time                       TIMESTAMP,
+            _ingest_date                       DATE,
+            _source_file                       STRING,
+            _source_system                     STRING,
+            _table                             STRING,
+            _lineage_id                        STRING,
+            _hashed_pk                         STRING,
+            _hashed_row                        STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
+    },
+    {
+        "table_name": f"{schema_name}_curated_bill_type",
+        "sql_statement": """
+        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
+            bill_type_key                      BIGINT,
+            bill_type_code                     STRING,
+            bill_type_description              STRING,
+            is_active                          BOOLEAN,
 
-                (
-                    delta_table.alias("t")
-                    .merge(
-                        source_df_cleaned.alias("s"),
-                        "t._hashed_pk = s._hashed_pk"
-                    )
-                    .whenMatchedUpdateAll(
-                        condition="NOT (t._hashed_row <=> s._hashed_row)"
-                    )
-                    .whenNotMatchedInsertAll()
-                    .execute()
-                )
-
-            # Replace all target data
-            case "overwrite":
-                logger.info(f'Overwriting records in {target_table_path}')
-                (
-                    source_df_cleaned
-                    .write.mode("overwrite")
-                    .format("delta")
-                    .option("overwriteSchema", "true")
-                    .save(target_table_path)
-                )
-
-            # Add records to target data
-            case "append":
-                logger.info(f'Appending new records to {target_table_path}')
-                (
-                    source_df_cleaned
-                    .write.mode("append")
-                    .format("delta")
-                    .option("mergeSchema", "true")
-                    .save(target_table_path)
-                )
-
-            case _:
-                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
-
-    # Return metrics from the latest Delta operation
-    delta_table = DeltaTable.forPath(spark, target_table_path)
-    metrics = delta_table.history(1).select("operationMetrics").first()["operationMetrics"]
-
-    return {
-        "rows_inserted": int(metrics.get("numTargetRowsInserted", metrics.get("numOutputRows", 0))),
-        "rows_updated": int(metrics.get("numTargetRowsUpdated", 0)),
-        "rows_read": int(metrics.get("numSourceRows", 0)),
-        "rows_copied": int(metrics.get("numTargetRowsCopied", 0))
+        --metadata
+            _ingest_time                       TIMESTAMP,
+            _ingest_date                       DATE,
+            _source_file                       STRING,
+            _source_system                     STRING,
+            _table                             STRING,
+            _lineage_id                        STRING,
+            _hashed_pk                         STRING,
+            _hashed_row                        STRING
+        )
+        USING DELTA
+        LOCATION '{location_path}/{table_name}'
+        {tbl_properties}
+        """
     }
-
-
-
-
-
-
-# Merge final temp views into existing target silver tables
-load_results = []
-
-for cfg in table_config:
-    target_table = cfg.get("target_table")
-
-    target_prefix = f"{target_schema}_"
-    target_entity = target_table[len(target_prefix):] if target_table.startswith(target_prefix) else to_snake_case(target_table)
-
-    target_view = f"tgt_{target_entity}"
-    target_table_path = f"{location_root}/{target_table}"
-    full_target_name = f"{target_schema}.{target_table}"
-
-    # Run target load
-    df_target = spark.table(target_view)
-    result = load_to_target(df_target, target_table_path, target_load_strategy)
-    load_results.append(result)
-
-    # Print metrics returned by load_to_target
-    print(full_target_name)
-    print(f"rows_inserted: {result['rows_inserted']}")
-    print(f"rows_updated: {result['rows_updated']}")
-    print(f"rows_read: {result['rows_read']}")
-    print(f"rows_copied: {result['rows_copied']}")
-
-# Return total metrics to pipeline
-result = {
-    "rows_inserted": sum(item["rows_inserted"] for item in load_results),
-    "rows_updated": sum(item["rows_updated"] for item in load_results),
-    "rows_read": sum(item["rows_read"] for item in load_results),
-    "rows_copied": sum(item["rows_copied"] for item in load_results)
-}
-
-notebookutils.notebook.exit(result)
+]
