@@ -1,24 +1,56 @@
-# Print merge metrics.
-delta_table = DeltaTable.forPath(spark, target_table_path)
-operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
+#2. Framework-aligned target load helper. > nb_load_to_silver: nb_load_to_silver
+#   merge-scd1 updates only when the business row hash changes
+def load_to_target(source_df_cleaned, target_table_path, target_load_strategy):
+    # If the target table path does not exist yet, create it.
+    if not DeltaTable.isDeltaTable(spark, target_table_path):
+        logger.info(f'Writing new table to {target_table_path}')
+        source_df_cleaned.write.format('delta').mode("overwrite").save(target_table_path)
 
-rows_inserted = int(operation_metrics.get("numTargetRowsInserted", 0))
-rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
-rows_deleted = int(operation_metrics.get("numTargetRowsDeleted", 0))
-rows_copied = int(operation_metrics.get("numTargetRowsCopied", 0))
-rows_affected = rows_inserted + rows_updated + rows_deleted
+    else:
+        match target_load_strategy:
+            case 'merge-scd1':
+                logger.info(f'Running merge-scd1 into {target_table_path}')
+                delta_table = DeltaTable.forPath(spark, target_table_path)
 
-print(full_target_name)
-print(f"rows_inserted: {rows_inserted}")
-print(f"rows_updated: {rows_updated}")
-print(f"rows_deleted: {rows_deleted}")
-print(f"rows_copied: {rows_copied}")
-print(f"rows_affected: {rows_affected}")
+                (
+                    delta_table.alias("t").merge(
+                        source_df_cleaned.alias("s"),
+                        "t._hashed_pk = s._hashed_pk"
+                    )
+                    .whenMatchedUpdateAll(
+                        condition="NOT (t._hashed_row <=> s._hashed_row)"
+                    )
+                    .whenNotMatchedInsertAll()
+                    .execute()
+                )
+
+            case 'overwrite':
+                logger.info(f'Overwriting records in {target_table_path}')
+                (
+                    source_df_cleaned
+                    .write.mode("overwrite")
+                    .format("delta")
+                    .option("overwriteSchema", "true")
+                    .save(target_table_path)
+                )
+
+            case 'append':
+                logger.info(f'Appending new records to {target_table_path}')
+                (
+                    source_df_cleaned
+                    .write.mode("append")
+                    .format("delta")
+                    .option("mergeSchema", "true")
+                    .save(target_table_path)
+                )
+
+            case _:
+                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
 
 
 
 
-# Check what merge-scd1 will insert or update before loading
+# Merge final temp views into existing target silver tables
 for cfg in table_config:
     target_table = cfg.get("target_table")
 
@@ -27,24 +59,21 @@ for cfg in table_config:
 
     target_view = f"tgt_{target_entity}"
     target_table_path = f"{location_root}/{target_table}"
+    full_target_name = f"{target_schema}.{target_table}"
 
-    if DeltaTable.isDeltaTable(spark, target_table_path):
-        df_source = spark.table(target_view).select("_hashed_pk", "_hashed_row")
-        df_target = DeltaTable.forPath(spark, target_table_path).toDF().select("_hashed_pk", "_hashed_row")
+    # Load target table
+    df_target = spark.table(target_view)
+    load_to_target(df_target, target_table_path, target_load_strategy)
 
-        rows_to_insert = (
-            df_source.alias("s")
-            .join(df_target.alias("t"), "_hashed_pk", "left_anti")
-            .count()
-        )
+    # Print latest load metrics
+    delta_table = DeltaTable.forPath(spark, target_table_path)
+    operation_metrics = delta_table.history(1).select("operationMetrics").collect()[0]["operationMetrics"]
 
-        rows_to_update = (
-            df_source.alias("s")
-            .join(df_target.alias("t"), "_hashed_pk", "inner")
-            .filter("NOT (t._hashed_row <=> s._hashed_row)")
-            .count()
-        )
+    rows_inserted = int(operation_metrics.get("numTargetRowsInserted", 0))
+    rows_updated = int(operation_metrics.get("numTargetRowsUpdated", 0))
+    rows_affected = rows_inserted + rows_updated
 
-        print(target_table)
-        print(f"rows_to_insert: {rows_to_insert}")
-        print(f"rows_to_update: {rows_to_update}")
+    print(full_target_name)
+    print(f"rows_inserted: {rows_inserted}")
+    print(f"rows_updated: {rows_updated}")
+    print(f"rows_affected: {rows_affected}")
