@@ -1,142 +1,510 @@
-# Load to target table
-def load_to_target_v2(df, target_table_name, target_load_strategy, target_location_path):
-    # Get schema and table name from target table name
-    target_schema, target_table = target_table_name.split(".", 1)
+# Framework-compatible parameters with manual fallbacks.
+import json
+import logging
+import uuid
+from datetime import date
 
-    # Set load metrics
-    rows_inserted = 0
-    rows_updated = 0
-    rows_read = 0
-    rows_copied = 0
+from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
 
-    # If target path does not exist, create delta files and table
-    if not DeltaTable.isDeltaTable(spark, target_location_path):
-        rows_read = df.count()
-        rows_inserted = rows_read
-        rows_copied = rows_read
+# Basic notebook runtime values
+task_id = 50
+task_name = "Load RMDD Address to Silver"
+lineage_id = str(uuid.uuid4())
+limit_rows_for_debugging = False
 
-        # Create schema
-        logger.info(f"Creating new schema {target_schema}")
-        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+# Manual watermark values
+prev_wm = "1900-01-01 00:00:00"
+curr_wm = "2026-06-30 00:00:00"
 
-        # Create delta files
-        logger.info(f"Creating new delta files at {target_location_path}")
-        df.write.format("delta").mode("overwrite").save(target_location_path)
+# Manual connection fallback
+server_name = "hbvkj6b5fvzenlsxgtupezx6wq-4qzy5g26bakuhffkkiyl64azc4.database.fabric.microsoft.com"
+source_connection_settings = "{}"
 
-        # Create delta table
-        logger.info(f"Creating new delta table {target_table_name}")
-        spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {target_table_name}
-        USING DELTA
-        LOCATION '{target_location_path}'
-        """)
+# Source config
+source_settings = json.dumps(
+    {
+        "source_name": "CAN_RMDD",
+        "source_database": "CAN_RMDD-236c5edd-b846-437b-b99b-39e8e56a0a5e",
+        "source_schema": "dbo",
+        "table_config": [
+            {
+                "source_table": "Address",
+                "target_table": "silver_rmdd_address",
+                "target_pk": ["address_id"],
+                "is_incremental": 1,
+                "incremental_column": "LastUpdatedDateGMT"
+            }
+        ],
+        "lookup_table_config": [
+            {
+                "source_table": "MDS_Country",
+                "lookup_view": "lkp_mds_country",
+                "source_schema": "dbo"
+            }
+        ],
+        "lookup_definitions": [
+            {
+                "table_name": "lkp_mds_country",
+                "key_columns": ["CountryID"],
+                "return_columns": ["CountryCode"]
+            }
+        ]
+    }
+)
 
-    else:
-        match target_load_strategy:
-            # Merge inserted and changed rows
-            case "merge-scd1":
-                logger.info(f"Running merge-scd1 into {target_table_name}")
+# Target config
+target_settings = json.dumps(
+    {
+        "target_lakehouse": "lh_canada_global_mds",
+        "target_schema": "silver_rmdd",
+        "target_location": "Files/silver/rmdd",
+        "target_load_strategy": "merge-scd1"
+    }
+)
 
-                rows_read = df.count()
-                delta_table = DeltaTable.forPath(spark, target_location_path)
-                df_target = spark.read.format("delta").load(target_location_path)
 
-                rows_inserted = (
-                    df.alias("s")
-                    .join(df_target.alias("t"), "_hashed_pk", "left_anti")
-                    .count()
-                )
 
-                rows_updated = (
-                    df.alias("s")
-                    .join(df_target.alias("t"), "_hashed_pk", "inner")
-                    .filter("NOT (t._hashed_row <=> s._hashed_row)")
-                    .count()
-                )
 
-                rows_copied = rows_inserted + rows_updated
 
-                if rows_copied == 0:
-                    logger.info(f"Skipping {target_table_name}: no changes")
-                else:
-                    (
-                        delta_table.alias("t")
-                        .merge(
-                            df.alias("s"),
-                            "t._hashed_pk = s._hashed_pk"
-                        )
-                        .whenMatchedUpdateAll(
-                            condition="NOT (t._hashed_row <=> s._hashed_row)"
-                        )
-                        .whenNotMatchedInsertAll()
-                        .execute()
-                    )
+#### Define functions and logging
+%run nb_transformation_shared_functions
 
-            # Replace all target data
-            case "overwrite":
-                logger.info(f"Overwriting records in {target_table_name}")
 
-                rows_read = df.count()
-                rows_copied = rows_read
+def normalize_lookup_name(value):
+    return "" if value is None else str(value).strip().lower()
 
-                (
-                    df.write
-                    .mode("overwrite")
-                    .format("delta")
-                    .option("overwriteSchema", "true")
-                    .save(target_location_path)
-                )
 
-            # Append all source rows
-            case "append":
-                logger.info(f"Appending new records to {target_table_name}")
+def normalize_lookup_value(value):
+    return "<NULL>" if value is None else str(value).strip()
 
-                rows_read = df.count()
-                rows_inserted = rows_read
-                rows_copied = rows_read
 
-                df.write.mode("append").format("delta").save(target_location_path)
+def normalize_lookup_list(value):
+    if value is None:
+        return []
 
-            case _:
-                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value]
 
-    # Always return load metrics
-    return {
-        "rows_inserted": rows_inserted,
-        "rows_updated": rows_updated,
-        "rows_read": rows_read,
-        "rows_copied": rows_copied
+    return [part.strip() for part in str(value).split("|") if part.strip()]
+
+
+def default_lookup_value(return_data_type):
+    data_type = "" if return_data_type is None else str(return_data_type).lower()
+
+    if any(token in data_type for token in ["string", "char", "varchar"]):
+        return "Unknown"
+
+    return "-1"
+
+
+def build_sql_lookup_registry(lookup_definitions):
+    """
+    Builds a driver-side lookup registry and registers lookup_function for Spark SQL.
+
+    SQL usage:
+        lookup_function(
+            'lookup_table_or_view_name',
+            'return_column_name',
+            array('key_column_1', 'key_column_2'),
+            array(source_col_1, source_col_2),
+            'string'
+        )
+
+    For numeric keys:
+        CAST(lookup_function(...) AS BIGINT)
+    """
+    lookup_values = {}
+    lookup_return_types = {}
+
+    for lookup_definition in lookup_definitions:
+        table_name = lookup_definition.get("table_name")
+        key_columns = lookup_definition.get("key_columns", [])
+        return_columns = lookup_definition.get("return_columns", [])
+
+        if not table_name:
+            raise ValueError("lookup_definitions requires table_name")
+
+        if not key_columns:
+            raise ValueError(f"lookup_definitions for {table_name} requires key_columns")
+
+        if not return_columns:
+            raise ValueError(f"lookup_definitions for {table_name} requires return_columns")
+
+        df_lookup = spark.table(table_name)
+
+        required_columns = list(dict.fromkeys(key_columns + return_columns))
+        df_lookup = df_lookup.select(*required_columns).dropDuplicates()
+
+        schema_by_name = {
+            field.name.lower(): field.dataType.simpleString().lower()
+            for field in df_lookup.schema.fields
+        }
+
+        rows = df_lookup.collect()
+
+        for return_column in return_columns:
+            registry_key = (
+                normalize_lookup_name(table_name),
+                normalize_lookup_name(return_column),
+                tuple(normalize_lookup_name(col) for col in key_columns)
+            )
+
+            lookup_values[registry_key] = {}
+            lookup_return_types[registry_key] = schema_by_name.get(
+                normalize_lookup_name(return_column),
+                ""
+            )
+
+            for row in rows:
+                key_value = tuple(normalize_lookup_value(row[col]) for col in key_columns)
+
+                if key_value not in lookup_values[registry_key]:
+                    lookup_values[registry_key][key_value] = row[return_column]
+
+    lookup_payload = {
+        "values": lookup_values,
+        "return_types": lookup_return_types
     }
 
+    lookup_payload_broadcast = spark.sparkContext.broadcast(lookup_payload)
+
+    def lookup_function(
+        table_name,
+        return_column_name,
+        key_column_names,
+        key_values,
+        return_data_type
+    ):
+        payload = lookup_payload_broadcast.value
+
+        normalized_key_columns = tuple(
+            normalize_lookup_name(col)
+            for col in normalize_lookup_list(key_column_names)
+        )
+
+        normalized_key_values = tuple(
+            normalize_lookup_value(value)
+            for value in normalize_lookup_list(key_values)
+        )
+
+        registry_key = (
+            normalize_lookup_name(table_name),
+            normalize_lookup_name(return_column_name),
+            normalized_key_columns
+        )
+
+        effective_return_data_type = (
+            return_data_type
+            or payload["return_types"].get(registry_key)
+            or ""
+        )
+
+        result = payload["values"].get(registry_key, {}).get(normalized_key_values)
+
+        if result is None:
+            return default_lookup_value(effective_return_data_type)
+
+        return str(result)
+
+    spark.udf.register("lookup_function", lookup_function, StringType())
+
+    return lookup_payload_broadcast
+
+
+# Set up standard framework logging
+setup_logging()
+logger = logging.getLogger("LoadRMDDAddressToSilver")
+logger.setLevel(logging.INFO)
+
+
+
+
+
+# Accept either JSON strings from pipeline or already-parsed dicts for manual runs.
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
+
+source_connection_settings = (
+    json.loads(source_connection_settings)
+    if isinstance(source_connection_settings, str)
+    else source_connection_settings
+)
+
+# Source configuration
+source_name = source_settings.get("source_name")
+source_database = source_settings.get("source_database") or source_settings.get("database_name")
+source_schema = source_settings.get("source_schema")
+table_config = source_settings.get("table_config", [])
+lookup_table_config = source_settings.get("lookup_table_config", [])
+lookup_definitions = source_settings.get("lookup_definitions", [])
+
+# Target configuration
+target_lakehouse = target_settings.get("target_lakehouse")
+target_schema = target_settings.get("target_schema")
+target_location = target_settings.get("target_location")
+target_load_strategy = target_settings.get("target_load_strategy", "merge-scd1")
+
+# SQL connection configuration
+server_name = (
+    source_connection_settings.get("server_name")
+    or source_connection_settings.get("jdbc_hostname")
+    or source_connection_settings.get("server")
+    or server_name
+)
+
+print(source_name)
+print(source_database)
+print(target_schema)
+display(table_config)
+display(lookup_table_config)
+display(lookup_definitions)
+
+
+
+
+# Build JDBC connection to source SQL database.
+jdbc_url = (
+    "jdbc:sqlserver://"
+    f"{server_name}:1433;"
+    f"database={source_database};"
+    "encrypt=true;"
+)
+
+connection_properties = {
+    "accessToken": mssparkutils.credentials.getToken("https://database.windows.net/"),
+    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+}
+
+print(jdbc_url)
+
+
+
+# Read source address table and lookup tables.
+source_dfs = {}
+lookup_dfs = {}
+
+for cfg in table_config:
+    source_table = cfg.get("source_table")
+    source_table_schema = cfg.get("source_schema", source_schema)
+    source_view = f"src_{to_snake_case(source_table)}"
+    full_source_name = f"{source_table_schema}.{source_table}"
+
+    source_query = f"""
+    (
+        SELECT *
+        FROM {full_source_name}
+    ) AS src
+    """
+
+    df_source = spark.read.jdbc(
+        url=jdbc_url,
+        table=source_query,
+        properties=connection_properties
+    )
+
+    if limit_rows_for_debugging:
+        df_source = df_source.limit(1000)
+
+    df_source = remove_exact_duplicates(df_source)
+    df_source.createOrReplaceTempView(source_view)
+    source_dfs[source_table] = df_source
+
+    print(f"Source preview for {source_view} ({full_source_name})")
+    display(df_source.limit(3))
+
+for cfg in lookup_table_config:
+    lookup_source_table = cfg.get("source_table")
+    lookup_source_schema = cfg.get("source_schema", source_schema)
+    lookup_view = cfg.get("lookup_view", f"lkp_{to_snake_case(lookup_source_table)}")
+    full_lookup_name = f"{lookup_source_schema}.{lookup_source_table}"
+
+    lookup_query = f"""
+    (
+        SELECT *
+        FROM {full_lookup_name}
+    ) AS src
+    """
+
+    df_lookup = spark.read.jdbc(
+        url=jdbc_url,
+        table=lookup_query,
+        properties=connection_properties
+    )
+
+    df_lookup = remove_exact_duplicates(df_lookup)
+    df_lookup.createOrReplaceTempView(lookup_view)
+    lookup_dfs[lookup_view] = df_lookup
+
+    print(f"Lookup preview for {lookup_view} ({full_lookup_name})")
+    display(df_lookup.limit(3))
+
+# Register lookup_function(...) for use inside Spark SQL.
+lookup_registry = build_sql_lookup_registry(lookup_definitions)
+
+
+
+
+# Map source views into target shape.
+mapped_dfs = {}
+
+for cfg in table_config:
+    source_table = cfg.get("source_table")
+    source_view = f"src_{to_snake_case(source_table)}"
+
+    target_table = cfg.get("target_table")
+    target_prefix = f"{target_schema}_"
+    target_entity = (
+        target_table[len(target_prefix):]
+        if target_table.startswith(target_prefix)
+        else to_snake_case(target_table)
+    )
+
+    map_view = f"map_{target_entity}"
+
+    watermark_column = cfg.get("incremental_column")
+    is_incremental = cfg.get("is_incremental", 0)
+    watermark_filter = "1 = 1"
+
+    if is_incremental == 1 and watermark_column:
+        watermark_filter = (
+            f"s.{watermark_column} > '{prev_wm}' "
+            f"AND s.{watermark_column} <= '{curr_wm}'"
+        )
+
+    if target_entity != "address":
+        raise ValueError(f"No mapping defined for target entity: {target_entity}")
+
+    spark.sql(f"""
+    CREATE OR REPLACE TEMP VIEW {map_view} AS
+    SELECT
+        CAST(row_number() OVER (ORDER BY s.AddressID) AS BIGINT) AS address_key,
+        CAST(s.AddressID AS INT)                                 AS address_id,
+        CAST(s.AddressTypeCode AS STRING)                        AS address_type_code,
+        CAST(s.Address1 AS STRING)                               AS address_1,
+        CAST(s.Address2 AS STRING)                               AS address_2,
+        CAST(s.Address3 AS STRING)                               AS address_3,
+        CAST(s.Address4 AS STRING)                               AS address_4,
+        CAST(s.Address5 AS STRING)                               AS address_5,
+        CAST(s.City AS STRING)                                   AS city,
+        CAST(s.CountryID AS INT)                                 AS country_id,
+
+        lookup_function(
+            'lkp_mds_country',
+            'CountryCode',
+            array('CountryID'),
+            array(s.CountryID),
+            'string'
+        )                                                        AS country_code_iso2,
+
+        CAST(s.State AS STRING)                                  AS state,
+        CAST(s.PostalCode AS STRING)                             AS zip_code,
+        CAST(s.Address1 AS STRING)                               AS street_address_check,
+        CAST(s.Active AS BOOLEAN)                                AS is_active,
+        CAST(s.LastUpdatedDateGMT AS TIMESTAMP)                  AS last_updated_date_utc_at_source
+    FROM {source_view} s
+    WHERE {watermark_filter}
+    """)
+
+    mapped_dfs[target_table] = spark.table(map_view)
+
+    print(f"Mapped preview for {map_view}")
+    display(mapped_dfs[target_table].limit(3))
+
+
+
+
+
+# Add metadata and hashes to mapped views.
+target_dfs = {}
+
+for cfg in table_config:
+    source_table = cfg.get("source_table")
+    target_table = cfg.get("target_table")
+    target_pk = cfg.get("target_pk", [])
+
+    target_prefix = f"{target_schema}_"
+    target_entity = (
+        target_table[len(target_prefix):]
+        if target_table.startswith(target_prefix)
+        else to_snake_case(target_table)
+    )
+
+    target_view = f"tgt_{target_entity}"
+    source_file = f"{source_schema}.{source_table}"
+
+    df_target = mapped_dfs[target_table]
+    pk_expr_cols = [to_snake_case(col) for col in target_pk]
+
+    df_target = df_target.withColumn(
+        "_hashed_pk",
+        F.md5(F.concat_ws("|", *[
+            F.coalesce(F.col(col).cast("string"), F.lit("<NULL>"))
+            for col in pk_expr_cols
+        ]))
+    )
+
+    row_hash_cols = [
+        col for col in df_target.columns
+        if col not in [df_target.columns[0], "_hashed_pk"] + pk_expr_cols
+    ]
+
+    df_target = df_target.withColumn(
+        "_hashed_row",
+        F.md5(F.concat_ws("|", *[
+            F.coalesce(F.col(col).cast("string"), F.lit("<NULL>"))
+            for col in row_hash_cols
+        ]))
+    )
+
+    df_target = add_metadata(
+        df=df_target,
+        ingest_date=str(date.today()),
+        file_path=source_file,
+        schema_name=source_name,
+        table_name=target_table,
+        lineage_id=lineage_id
+    )
+
+    df_target.createOrReplaceTempView(target_view)
+    target_dfs[target_table] = df_target
+
+    print(f"Target preview for {target_view}")
+    display(df_target.limit(3))
 
 
 
 
 
 
-# Load final DataFrames to silver taxonomy tables
+# Check duplicate hashed keys before merge.
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+
+    print(f"Checking duplicates for {target_table}")
+    validate_duplicates(target_dfs[target_table], "_hashed_pk", 10)
+
+
+
+
+
+# Merge final DataFrames to silver RMDD tables.
 load_results = []
 
 for cfg in table_config:
-    # Get table definition from source_settings
     target_table = cfg.get("target_table")
 
-    # Set target table and location
     target_table_name = f"{target_schema}.{target_table}"
     target_location_path = f"{target_location}/{target_table}"
-
-    # Lookup target table on target_dfs
     df_target = target_dfs[target_table]
 
-    # Call load_to_target and keep returned metrics
-    result = load_to_target_v2(
+    result = load_to_target(
         df_target,
         target_table_name,
         target_load_strategy,
         target_location_path
     )
 
-    # Save metrics for pipeline or later summary
     load_results.append({
         "table": target_table_name,
         "rows_inserted": result["rows_inserted"],
@@ -145,9 +513,10 @@ for cfg in table_config:
         "rows_copied": result["rows_copied"]
     })
 
-    # Print metrics for each table
-    print(target_table_name)
-    print(f"rows_inserted: {result['rows_inserted']}")
-    print(f"rows_updated: {result['rows_updated']}")
-    print(f"rows_read: {result['rows_read']}")
-    print(f"rows_copied: {result['rows_copied']}")
+display(load_results)
+    
+
+
+
+
+
