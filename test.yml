@@ -1,54 +1,93 @@
-# Standard framework logging setup.
-setup_logging()
-logger = logging.getLogger("LoadTaxonomyToSilver")
-logger.setLevel(logging.INFO)
-
-
-
-# Accept either JSON strings from pipeline or already-parsed dicts for manual runs.
+# Parse notebook settings
 source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
 target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
 
-# Source configuration
 source_name = source_settings.get("source_name")
 source_schema = source_settings.get("source_schema")
 table_config = source_settings.get("table_config", [])
 
-# Target configuration
 target_lakehouse_name = target_settings.get("lakehouse_name")
 target_schema = target_settings.get("schema_name")
 target_load_strategy = target_settings.get("load_strategy", "overwrite")
 location_root = target_settings.get("location_root")
 
-print(source_name)
-print(source_schema)
-print(target_schema)
 display(table_config)
 
 
 
+# Read shortcut tables and remove exact duplicates
+source_dfs = {}
 
-# Load shortcut tables to silver.
+for cfg in table_config:
+    source_table = cfg.get("source_table")
+
+    df_source = spark.table(f"{source_schema}.{source_table}")
+    df_source = remove_exact_duplicates(df_source)
+
+    source_dfs[source_table] = df_source
+
+    print(f"Source preview for {source_schema}.{source_table}")
+    display(df_source.limit(3))
+
+
+
+# Add metadata to the cleaned source data
+from datetime import date
+
+target_dfs = {}
+
+for cfg in table_config:
+    source_table = cfg.get("source_table")
+    target_table = cfg.get("target_table")
+
+    df_target = source_dfs[source_table]
+
+    df_target = add_metadata(
+        df=df_target,
+        ingest_date=str(date.today()),
+        file_path=f"{source_schema}.{source_table}",
+        schema_name=source_name,
+        table_name=target_table,
+        lineage_id=lineage_id
+    )
+
+    target_dfs[target_table] = df_target
+
+    print(f"Target preview for {target_table}")
+    display(df_target.limit(3))
+
+
+
+
+
+
+# Check duplicate business keys before load
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+    duplicate_key = cfg.get("duplicate_key", "natural_key_hash")
+
+    print(f"Checking duplicates for {target_table}")
+    validate_duplicates(target_dfs[target_table], duplicate_key, 10)
+
+
+
+
+
+# Load final DataFrames to silver taxonomy tables
 status = "Failed"
 load_results = []
 
 try:
     for cfg in table_config:
-        source_table = cfg.get("source_table")
         target_table = cfg.get("target_table")
-
-        full_source_name = f"{source_schema}.{source_table}"
-        full_target_name = f"{target_schema}.{target_table}"
         target_table_path = f"{location_root}/{target_table}"
+        full_target_name = f"{target_schema}.{target_table}"
 
-        # Read shortcut table exactly as-is.
-        df_source = spark.table(full_source_name)
-        rows_read = df_source.count()
+        df_target = target_dfs[target_table]
+        rows_read = df_target.count()
 
-        # Replace target data using the shared load function.
-        load_to_target(df_source, target_table_path, target_load_strategy)
+        load_to_target(df_target, target_table_path, target_load_strategy)
 
-        # Register target path as table if needed.
         spark.sql(f"""
         CREATE TABLE IF NOT EXISTS {full_target_name}
         USING DELTA
@@ -58,13 +97,11 @@ try:
         load_results.append({
             "table": full_target_name,
             "rows_read": rows_read,
-            "rows_inserted": rows_read,
-            "rows_updated": 0,
             "rows_copied": rows_read
         })
 
         print(full_target_name)
-        print(f"rows_replaced: {rows_read}")
+        print(f"rows_copied: {rows_read}")
 
     status = "Completed"
 
@@ -72,15 +109,3 @@ except Exception:
     logger.exception("Processing error.")
     status = "Failed"
     raise
-
-
-
-
-# Quick target validation.
-for cfg in table_config:
-    target_table = cfg.get("target_table")
-    full_target_name = f"{target_schema}.{target_table}"
-
-    df_check = spark.table(full_target_name)
-    print(f"{full_target_name}: {df_check.count()} rows")
-    display(df_check.limit(5))
