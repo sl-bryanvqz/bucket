@@ -1,20 +1,153 @@
-def validate_duplicates(df, key_col="_hashed_pk", limit=10):
-    group_cols = key_col if isinstance(key_col, list) else [key_col]
+# Load to target table
+def load_to_target_v2(df, target_table_name, target_load_strategy, target_location_path):
+    # Get schema and table name from target table name
+    target_schema, target_table = target_table_name.split(".", 1)
 
-    dup_keys_df = (
-        df.groupBy(*group_cols)
-          .agg(F.count("*").alias("duplicate_count"))
-          .filter(F.col("duplicate_count") > 1)
-          .orderBy(F.col("duplicate_count").desc())
+    # Set load metrics
+    rows_inserted = 0
+    rows_updated = 0
+    rows_read = 0
+    rows_copied = 0
+
+    # If target path does not exist, create delta files and table
+    if not DeltaTable.isDeltaTable(spark, target_location_path):
+        rows_read = df.count()
+        rows_inserted = rows_read
+        rows_copied = rows_read
+
+        # Create schema
+        logger.info(f"Creating new schema {target_schema}")
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+
+        # Create delta files
+        logger.info(f"Creating new delta files at {target_location_path}")
+        df.write.format("delta").mode("overwrite").save(target_location_path)
+
+        # Create delta table
+        logger.info(f"Creating new delta table {target_table_name}")
+        spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {target_table_name}
+        USING DELTA
+        LOCATION '{target_location_path}'
+        """)
+
+    else:
+        match target_load_strategy:
+            # Merge inserted and changed rows
+            case "merge-scd1":
+                logger.info(f"Running merge-scd1 into {target_table_name}")
+
+                rows_read = df.count()
+                delta_table = DeltaTable.forPath(spark, target_location_path)
+                df_target = spark.read.format("delta").load(target_location_path)
+
+                rows_inserted = (
+                    df.alias("s")
+                    .join(df_target.alias("t"), "_hashed_pk", "left_anti")
+                    .count()
+                )
+
+                rows_updated = (
+                    df.alias("s")
+                    .join(df_target.alias("t"), "_hashed_pk", "inner")
+                    .filter("NOT (t._hashed_row <=> s._hashed_row)")
+                    .count()
+                )
+
+                rows_copied = rows_inserted + rows_updated
+
+                if rows_copied == 0:
+                    logger.info(f"Skipping {target_table_name}: no changes")
+                else:
+                    (
+                        delta_table.alias("t")
+                        .merge(
+                            df.alias("s"),
+                            "t._hashed_pk = s._hashed_pk"
+                        )
+                        .whenMatchedUpdateAll(
+                            condition="NOT (t._hashed_row <=> s._hashed_row)"
+                        )
+                        .whenNotMatchedInsertAll()
+                        .execute()
+                    )
+
+            # Replace all target data
+            case "overwrite":
+                logger.info(f"Overwriting records in {target_table_name}")
+
+                rows_read = df.count()
+                rows_copied = rows_read
+
+                (
+                    df.write
+                    .mode("overwrite")
+                    .format("delta")
+                    .option("overwriteSchema", "true")
+                    .save(target_location_path)
+                )
+
+            # Append all source rows
+            case "append":
+                logger.info(f"Appending new records to {target_table_name}")
+
+                rows_read = df.count()
+                rows_inserted = rows_read
+                rows_copied = rows_read
+
+                df.write.mode("append").format("delta").save(target_location_path)
+
+            case _:
+                raise ValueError(f"Unsupported target_load_strategy: {target_load_strategy}")
+
+    # Always return load metrics
+    return {
+        "rows_inserted": rows_inserted,
+        "rows_updated": rows_updated,
+        "rows_read": rows_read,
+        "rows_copied": rows_copied
+    }
+
+
+
+
+
+
+
+# Load final DataFrames to silver taxonomy tables
+load_results = []
+
+for cfg in table_config:
+    # Get table definition from source_settings
+    target_table = cfg.get("target_table")
+
+    # Set target table and location
+    target_table_name = f"{target_schema}.{target_table}"
+    target_location_path = f"{target_location}/{target_table}"
+
+    # Lookup target table on target_dfs
+    df_target = target_dfs[target_table]
+
+    # Call load_to_target and keep returned metrics
+    result = load_to_target_v2(
+        df_target,
+        target_table_name,
+        target_load_strategy,
+        target_location_path
     )
 
-    total_dup_groups = dup_keys_df.count()
-    print(f"Total duplicate {group_cols} groups: {total_dup_groups}")
-    display(dup_keys_df.limit(limit))
+    # Save metrics for pipeline or later summary
+    load_results.append({
+        "table": target_table_name,
+        "rows_inserted": result["rows_inserted"],
+        "rows_updated": result["rows_updated"],
+        "rows_read": result["rows_read"],
+        "rows_copied": result["rows_copied"]
+    })
 
-    if total_dup_groups > 0:
-        dup_records_df = (
-            df.join(dup_keys_df.select(*group_cols), on=group_cols, how="inner")
-              .orderBy(*group_cols)
-        )
-        display(dup_records_df.limit(limit))
+    # Print metrics for each table
+    print(target_table_name)
+    print(f"rows_inserted: {result['rows_inserted']}")
+    print(f"rows_updated: {result['rows_updated']}")
+    print(f"rows_read: {result['rows_read']}")
+    print(f"rows_copied: {result['rows_copied']}")
