@@ -1,589 +1,86 @@
-schema_name = "silver_taxonomy"
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+# Standard framework logging setup.
+setup_logging()
+logger = logging.getLogger("LoadTaxonomyToSilver")
+logger.setLevel(logging.INFO)
 
-location_path = "Files/silver/taxonomy"
 
-tbl_properties = """
-TBLPROPERTIES (
-    'delta.autoOptimize.optimizeWrite'     = 'true',
-    'delta.autoOptimize.autoCompact'       = 'true',
-    'delta.logRetentionDuration'           = 'interval 30 days',
-    'delta.deletedFileRetentionDuration'   = 'interval 7 days'
-)
-"""
 
-tables_definition = [
-    {
-        "table_name": f"{schema_name}_curated_band_level",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            band_level_key BIGINT,
-            band_level_code STRING,
-            band_level_description STRING,
-            band_group_code STRING,
-            band_group_description STRING,
-            is_active BOOLEAN,
+# Accept either JSON strings from pipeline or already-parsed dicts for manual runs.
+source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
+target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
+# Source configuration
+source_name = source_settings.get("source_name")
+source_schema = source_settings.get("source_schema")
+table_config = source_settings.get("table_config", [])
+
+# Target configuration
+target_lakehouse_name = target_settings.get("lakehouse_name")
+target_schema = target_settings.get("schema_name")
+target_load_strategy = target_settings.get("load_strategy", "overwrite")
+location_root = target_settings.get("location_root")
+
+print(source_name)
+print(source_schema)
+print(target_schema)
+display(table_config)
+
+
+
+
+# Load shortcut tables to silver.
+status = "Failed"
+load_results = []
+
+try:
+    for cfg in table_config:
+        source_table = cfg.get("source_table")
+        target_table = cfg.get("target_table")
+
+        full_source_name = f"{source_schema}.{source_table}"
+        full_target_name = f"{target_schema}.{target_table}"
+        target_table_path = f"{location_root}/{target_table}"
+
+        # Read shortcut table exactly as-is.
+        df_source = spark.table(full_source_name)
+        rows_read = df_source.count()
+
+        # Replace target data using the shared load function.
+        load_to_target(df_source, target_table_path, target_load_strategy)
+
+        # Register target path as table if needed.
+        spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {full_target_name}
         USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_bill_type",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            bill_type_key BIGINT,
-            bill_type_code STRING,
-            bill_type_description STRING,
-            is_active BOOLEAN,
+        LOCATION '{target_table_path}'
+        """)
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_client_sector",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            client_sector_key BIGINT,
-            sic_code STRING,
-            ibg_code STRING,
-            ibg_sector_code STRING,
-            sic_code_description STRING,
-            ibg_code_description STRING,
-            ibg_sector_code_description STRING,
-            default_matter_sub_industry_code STRING,
-            is_active BOOLEAN,
+        load_results.append({
+            "table": full_target_name,
+            "rows_read": rows_read,
+            "rows_inserted": rows_read,
+            "rows_updated": 0,
+            "rows_copied": rows_read
+        })
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_company",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            company_key BIGINT,
-            company_code STRING,
-            member_firm_code STRING,
-            company_name STRING,
-            city STRING,
-            country_code_iso2 STRING,
-            currency_code STRING,
-            is_active BOOLEAN,
+        print(full_target_name)
+        print(f"rows_replaced: {rows_read}")
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_country",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            country_key BIGINT,
-            country_code_iso2 STRING,
-            country_code_iso3 STRING,
-            country_code_iso4 STRING,
-            country_name STRING,
-            nationality STRING,
-            language_code STRING,
-            currency_code STRING,
-            continent STRING,
-            un_member BOOLEAN,
-            is_active BOOLEAN,
+    status = "Completed"
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_currency",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            currency_key BIGINT,
-            currency_code STRING,
-            iso_no STRING,
-            currency_description STRING,
-            decimals INT,
-            is_active BOOLEAN,
+except Exception:
+    logger.exception("Processing error.")
+    status = "Failed"
+    raise
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_employee_sub_group",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            employee_sub_group_key BIGINT,
-            employee_sub_group_code STRING,
-            employee_sub_group_description STRING,
-            employee_group_code STRING,
-            employee_group_description STRING,
-            is_active BOOLEAN,
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_entry_classification",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            entry_classification_key BIGINT,
-            entry_classification_code STRING,
-            entry_classification_description STRING,
-            is_active BOOLEAN,
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_billing_frequency",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_billing_frequency_key BIGINT,
-            matter_billing_frequency_code STRING,
-            matter_billing_frequency_description STRING,
-            is_active BOOLEAN,
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_billing_method",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_billing_method_key BIGINT,
-            matter_billing_method_code STRING,
-            matter_billing_method_description STRING,
-            is_active BOOLEAN,
+# Quick target validation.
+for cfg in table_config:
+    target_table = cfg.get("target_table")
+    full_target_name = f"{target_schema}.{target_table}"
 
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_category",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_category_key BIGINT,
-            matter_category_code INT,
-            matter_category_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_entry_type",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_entry_type_key BIGINT,
-            matter_entry_type_code STRING,
-            matter_entry_type_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_sector",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_sector_key BIGINT,
-            sic_code STRING,
-            ibg_code STRING,
-            ibg_sector_code STRING,
-            sic_code_description STRING,
-            ibg_code_description STRING,
-            ibg_sector_code_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_matter_status",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            matter_status_key BIGINT,
-            matter_status_code STRING,
-            matter_status_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_nature_of_proceeding",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            nature_of_proceeding_key BIGINT,
-            nature_of_proceeding_code STRING,
-            nature_of_work_code STRING,
-            nature_of_proceeding_description STRING,
-            nature_of_work_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_office",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            office_key BIGINT,
-            office_code STRING,
-            member_firm_code STRING,
-            office_id INT,
-            company_key BIGINT,
-            office_name STRING,
-            street_1 STRING,
-            street_2 STRING,
-            street_3 STRING,
-            street_4 STRING,
-            street_5 STRING,
-            city STRING,
-            postal_code STRING,
-            region STRING,
-            country_code_iso2 STRING,
-            phone_number STRING,
-            fax_number STRING,
-            office_email_address STRING,
-            po_box STRING,
-            extension_prefix STRING,
-            utc_offset STRING,
-            website_url STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_partner_function",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            partner_function_key BIGINT,
-            partner_function_code STRING,
-            sap_code STRING,
-            partner_function_description STRING,
-            partner_function_type STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_practice_group",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            practice_group_key BIGINT,
-            practice_group_code STRING,
-            practice_group_description STRING,
-            practice_group_group STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_team",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            team_key BIGINT,
-            team STRING,
-            member_firm_code STRING,
-            team_id INT,
-            practice_group_key BIGINT,
-            team_name STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_transaction_document_type",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            transaction_document_type_key BIGINT,
-            transaction_document_type_code STRING,
-            transaction_document_type_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    },
-    {
-        "table_name": f"{schema_name}_curated_work_type",
-        "sql_statement": """
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}(
-            work_type_key BIGINT,
-            technical_area_code STRING,
-            matter_type_code STRING,
-            service_area_code STRING,
-            technical_area_description STRING,
-            matter_type_description STRING,
-            service_area_description STRING,
-            is_active BOOLEAN,
-
-            --metadata
-            _ingest_time TIMESTAMP,
-            _ingest_date DATE,
-            _source_file STRING,
-            _source_system STRING,
-            _table STRING,
-            _lineage_id STRING,
-            _hashed_pk STRING,
-            _hashed_row STRING
-        )
-        USING DELTA
-        LOCATION '{location_path}/{table_name}'
-        {tbl_properties}
-        """
-    }
-]
-
-for table in tables_definition:
-    table_name = table["table_name"]
-
-    spark.sql(table["sql_statement"].format(
-        schema_name=schema_name,
-        table_name=table_name,
-        location_path=location_path,
-        tbl_properties=tbl_properties
-    ))
-
-    print(f"Created or validated {schema_name}.{table_name}")
+    df_check = spark.table(full_target_name)
+    print(f"{full_target_name}: {df_check.count()} rows")
+    display(df_check.limit(5))
