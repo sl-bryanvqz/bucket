@@ -1,111 +1,20 @@
-# Parse notebook settings
-source_settings = json.loads(source_settings) if isinstance(source_settings, str) else source_settings
-target_settings = json.loads(target_settings) if isinstance(target_settings, str) else target_settings
+def validate_duplicates(df, key_col="_hashed_pk", limit=10):
+    group_cols = key_col if isinstance(key_col, list) else [key_col]
 
-source_name = source_settings.get("source_name")
-source_schema = source_settings.get("source_schema")
-table_config = source_settings.get("table_config", [])
-
-target_lakehouse_name = target_settings.get("lakehouse_name")
-target_schema = target_settings.get("schema_name")
-target_load_strategy = target_settings.get("load_strategy", "overwrite")
-location_root = target_settings.get("location_root")
-
-display(table_config)
-
-
-
-# Read shortcut tables and remove exact duplicates
-source_dfs = {}
-
-for cfg in table_config:
-    source_table = cfg.get("source_table")
-
-    df_source = spark.table(f"{source_schema}.{source_table}")
-    df_source = remove_exact_duplicates(df_source)
-
-    source_dfs[source_table] = df_source
-
-    print(f"Source preview for {source_schema}.{source_table}")
-    display(df_source.limit(3))
-
-
-
-# Add metadata to the cleaned source data
-from datetime import date
-
-target_dfs = {}
-
-for cfg in table_config:
-    source_table = cfg.get("source_table")
-    target_table = cfg.get("target_table")
-
-    df_target = source_dfs[source_table]
-
-    df_target = add_metadata(
-        df=df_target,
-        ingest_date=str(date.today()),
-        file_path=f"{source_schema}.{source_table}",
-        schema_name=source_name,
-        table_name=target_table,
-        lineage_id=lineage_id
+    dup_keys_df = (
+        df.groupBy(*group_cols)
+          .agg(F.count("*").alias("duplicate_count"))
+          .filter(F.col("duplicate_count") > 1)
+          .orderBy(F.col("duplicate_count").desc())
     )
 
-    target_dfs[target_table] = df_target
+    total_dup_groups = dup_keys_df.count()
+    print(f"Total duplicate {group_cols} groups: {total_dup_groups}")
+    display(dup_keys_df.limit(limit))
 
-    print(f"Target preview for {target_table}")
-    display(df_target.limit(3))
-
-
-
-
-
-
-# Check duplicate business keys before load
-for cfg in table_config:
-    target_table = cfg.get("target_table")
-    duplicate_key = cfg.get("duplicate_key", "natural_key_hash")
-
-    print(f"Checking duplicates for {target_table}")
-    validate_duplicates(target_dfs[target_table], duplicate_key, 10)
-
-
-
-
-
-# Load final DataFrames to silver taxonomy tables
-status = "Failed"
-load_results = []
-
-try:
-    for cfg in table_config:
-        target_table = cfg.get("target_table")
-        target_table_path = f"{location_root}/{target_table}"
-        full_target_name = f"{target_schema}.{target_table}"
-
-        df_target = target_dfs[target_table]
-        rows_read = df_target.count()
-
-        load_to_target(df_target, target_table_path, target_load_strategy)
-
-        spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {full_target_name}
-        USING DELTA
-        LOCATION '{target_table_path}'
-        """)
-
-        load_results.append({
-            "table": full_target_name,
-            "rows_read": rows_read,
-            "rows_copied": rows_read
-        })
-
-        print(full_target_name)
-        print(f"rows_copied: {rows_read}")
-
-    status = "Completed"
-
-except Exception:
-    logger.exception("Processing error.")
-    status = "Failed"
-    raise
+    if total_dup_groups > 0:
+        dup_records_df = (
+            df.join(dup_keys_df.select(*group_cols), on=group_cols, how="inner")
+              .orderBy(*group_cols)
+        )
+        display(dup_records_df.limit(limit))
